@@ -1,0 +1,6 @@
+{
+  "name": "CLUTCH",
+  "description": "An AI productivity agent that rescues users from missing deadlines.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

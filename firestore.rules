@@ -1,0 +1,52 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net (Pillar 1)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+    
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // /users/{uid}
+    match /users/{uid} {
+      allow read, write: if isOwner(uid);
+    }
+    
+    // /tasks/{taskId}
+    match /tasks/{taskId} {
+      allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+    }
+    
+    // /sessions/{sessionId}
+    match /sessions/{sessionId} {
+      allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+    }
+    
+    // /conversations/{convId}
+    match /conversations/{convId} {
+      allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+    }
+    
+    // /monitoring/{uid}
+    match /monitoring/{uid} {
+      allow read, write: if isOwner(uid);
+    }
+    
+    // /impact/{uid}
+    match /impact/{uid} {
+      allow read, write: if isOwner(uid);
+    }
+  }
+}
