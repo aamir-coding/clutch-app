@@ -2,16 +2,20 @@
 
 import React, { useState, useEffect } from 'react';
 import { useUiStore } from '@/lib/stores/uiStore';
-import { firestoreService, Task, ImpactStats } from '@/lib/firebase/firestoreService';
-import { CheckCircle2, Flame, Mail, Clock, ShieldAlert, Award, Calendar, Activity } from 'lucide-react';
+import { useAuth } from '@/components/layout/AuthProvider';
+import { firestoreService } from '@/lib/firebase/firestore';
+import { ImpactStats, Task } from '@/lib/types';
+import { CheckCircle2, Flame, Clock, ShieldAlert, Award, Activity } from 'lucide-react';
 
 export default function AnalyticsPage() {
   const setPageTitle = useUiStore((state: any) => state.setPageTitle);
+  const { user } = useAuth();
+  const userId = user?.uid ?? null;
+
   const [stats, setStats] = useState<ImpactStats | null>(null);
   const [completedCount, setCompletedCount] = useState(0);
   const [onTimeCount, setOnTimeCount] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
-  const [actions, setActions] = useState<{ id: string; timestamp: string; text: string }[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -20,30 +24,31 @@ export default function AnalyticsPage() {
     }
 
     const fetchData = async () => {
+      if (!userId) return;
       try {
         setLoading(true);
-        const userId = 'default_user';
 
-        const [impactStats, completedTasks, allTasks, recentLogs] = await Promise.all([
+        const [impactStats, completedTasks, allTasks] = await Promise.all([
           firestoreService.getImpactStats(userId),
           firestoreService.getTasks(userId, 'completed'),
-          firestoreService.getTasks(userId, 'all'),
-          firestoreService.getRecentActions(userId)
+          firestoreService.getTasks(userId),
         ]);
 
         setStats(impactStats);
         setCompletedCount(completedTasks.length);
         setTotalCount(allTasks.length);
 
-        // Check how many of the completed tasks are on time
-        const onTime = completedTasks.filter((task) => {
-          // If task.deadline was in the future compared to when it was finished (simplified)
-          // Since we don't store finishedAt, let's treat any completed task that's not overdue as onTime
-          return task.status === 'completed';
+        // Tasks whose deadline was still in the future when they completed
+        // are counted as on-time. Since completedAt is optional, we fall back
+        // to using the stored onTimeRate from Firestore.
+        const onTime = completedTasks.filter((task: Task) => {
+          if (task.completedAt) {
+            return task.completedAt.getTime() <= task.deadline.getTime();
+          }
+          // completedAt not recorded — skip from local count, rely on persisted rate
+          return false;
         }).length;
-        setOnTimeCount(onTime);
-
-        setActions(recentLogs);
+        setOnTimeCount(onTime || Math.round((impactStats.onTimeRate || 0) * completedTasks.length));
       } catch (e) {
         console.error('Failed to fetch analytics data:', e);
       } finally {
@@ -52,7 +57,7 @@ export default function AnalyticsPage() {
     };
 
     fetchData();
-  }, [setPageTitle]);
+  }, [setPageTitle, userId]);
 
   if (loading) {
     return (
@@ -63,12 +68,10 @@ export default function AnalyticsPage() {
     );
   }
 
-  // Calculate percentages
   const onTimePercent = totalCount > 0 ? Math.round((onTimeCount / totalCount) * 100) : 0;
-  const latePercent = totalCount > 0 ? Math.round(((completedCount - onTimeCount) / totalCount) * 100) : 0;
+  const latePercent = totalCount > 0 ? Math.round(((completedCount - onTimeCount) / Math.max(totalCount, 1)) * 100) : 0;
   const uncompletedPercent = totalCount > 0 ? Math.round(((totalCount - completedCount) / totalCount) * 100) : 0;
 
-  // Mock weekly overview (Completed per day)
   const weeklyData = [
     { day: 'Mon', completed: 3, onTime: 3, late: 0 },
     { day: 'Tue', completed: 4, onTime: 3, late: 1 },
@@ -83,7 +86,7 @@ export default function AnalyticsPage() {
 
   return (
     <div className="min-h-screen bg-[#06060A] text-slate-100 p-4 md:p-6 lg:p-8 space-y-8">
-      
+
       {/* Page Header */}
       <div className="flex items-center gap-3 pb-5 border-b border-slate-800">
         <div className="p-2.5 bg-indigo-500/10 rounded-xl border border-indigo-500/20">
@@ -101,11 +104,11 @@ export default function AnalyticsPage() {
 
       {/* Hero Stats Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* On Time Completed */}
+        {/* Tasks Saved */}
         <div className="bg-[#12121A] border border-[#1E1E2E] rounded-xl p-5 flex items-center justify-between shadow-md">
           <div className="space-y-1.5">
-            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 font-mono">On-Time Tasks</span>
-            <div className="text-3xl font-extrabold text-white">{onTimeCount}</div>
+            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 font-mono">Tasks Saved</span>
+            <div className="text-3xl font-extrabold text-white">{stats?.tasksSaved ?? 0}</div>
             <p className="text-xs text-slate-400">Successfully met goals</p>
           </div>
           <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
@@ -113,12 +116,12 @@ export default function AnalyticsPage() {
           </div>
         </div>
 
-        {/* Focus Hours Scheduled */}
+        {/* Hours Recovered */}
         <div className="bg-[#12121A] border border-[#1E1E2E] rounded-xl p-5 flex items-center justify-between shadow-md">
           <div className="space-y-1.5">
-            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 font-mono">Scheduled Focus</span>
-            <div className="text-3xl font-extrabold text-white">{stats?.focusHoursScheduled ?? 18}h</div>
-            <p className="text-xs text-slate-400">Chronological slots booked</p>
+            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 font-mono">Hours Recovered</span>
+            <div className="text-3xl font-extrabold text-white">{(stats?.hoursRecovered ?? 0).toFixed(1)}h</div>
+            <p className="text-xs text-slate-400">Time reclaimed via prevention</p>
           </div>
           <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-xl">
             <Clock className="w-6 h-6 text-indigo-400" />
@@ -129,7 +132,7 @@ export default function AnalyticsPage() {
         <div className="bg-[#12121A] border border-[#1E1E2E] rounded-xl p-5 flex items-center justify-between shadow-md">
           <div className="space-y-1.5">
             <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 font-mono">Active Streak</span>
-            <div className="text-3xl font-extrabold text-white">{stats?.currentStreak ?? 5} Days</div>
+            <div className="text-3xl font-extrabold text-white">{stats?.currentStreak ?? 0} Days</div>
             <p className="text-xs text-slate-400">All sessions completed</p>
           </div>
           <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl">
@@ -137,22 +140,22 @@ export default function AnalyticsPage() {
           </div>
         </div>
 
-        {/* Gmail Caught */}
+        {/* On-Time Rate */}
         <div className="bg-[#12121A] border border-[#1E1E2E] rounded-xl p-5 flex items-center justify-between shadow-md">
           <div className="space-y-1.5">
-            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 font-mono">Deadlines Caught</span>
-            <div className="text-3xl font-extrabold text-white">{stats?.gmailDeadlinesCaught ?? 8}</div>
-            <p className="text-xs text-slate-400">Scanned from Gmail</p>
+            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 font-mono">On-Time Rate</span>
+            <div className="text-3xl font-extrabold text-white">{Math.round((stats?.onTimeRate ?? 0) * 100)}%</div>
+            <p className="text-xs text-slate-400">Completed before deadline</p>
           </div>
           <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-xl">
-            <Mail className="w-6 h-6 text-indigo-400" />
+            <Award className="w-6 h-6 text-indigo-400" />
           </div>
         </div>
       </div>
 
       {/* Main Breakdown Section */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        
+
         {/* Weekly overview bar chart */}
         <div className="bg-[#12121A] border border-[#1E1E2E] rounded-xl p-6 space-y-6 shadow-md flex flex-col justify-between">
           <div>
@@ -176,16 +179,8 @@ export default function AnalyticsPage() {
                         {d.completed}
                       </div>
                     )}
-                    {/* On Time Portion */}
-                    <div 
-                      className="bg-emerald-500 rounded-t-sm w-full transition-all duration-500"
-                      style={{ height: `${onTimeHeight}px` }}
-                    />
-                    {/* Late Portion */}
-                    <div 
-                      className="bg-rose-500 rounded-t-sm w-full transition-all duration-500"
-                      style={{ height: `${lateHeight}px` }}
-                    />
+                    <div className="bg-rose-500 rounded-t-sm w-full transition-all duration-500" style={{ height: `${lateHeight}px` }} />
+                    <div className="bg-emerald-500 rounded-t-sm w-full transition-all duration-500" style={{ height: `${onTimeHeight}px` }} />
                   </div>
                   <span className="text-[10px] text-slate-400 font-mono uppercase">{d.day}</span>
                 </div>
@@ -217,7 +212,6 @@ export default function AnalyticsPage() {
           </div>
 
           <div className="space-y-4">
-            {/* Stat Row */}
             <div className="grid grid-cols-3 gap-2 text-center">
               <div>
                 <p className="text-[10px] text-slate-500 font-mono uppercase font-bold">On Time</p>
@@ -233,37 +227,24 @@ export default function AnalyticsPage() {
               </div>
             </div>
 
-            {/* Proportion Bars */}
             <div className="h-3 w-full bg-slate-900 rounded-full flex overflow-hidden">
-              <div 
-                className="bg-emerald-500 transition-all duration-500" 
-                style={{ width: `${onTimePercent || 33}%` }} 
-                title="On Time"
-              />
-              <div 
-                className="bg-rose-500 transition-all duration-500" 
-                style={{ width: `${latePercent || 33}%` }} 
-                title="Late"
-              />
-              <div 
-                className="bg-slate-700 transition-all duration-500" 
-                style={{ width: `${uncompletedPercent || 34}%` }} 
-                title="Uncompleted"
-              />
+              <div className="bg-emerald-500 transition-all duration-500" style={{ width: `${onTimePercent || 33}%` }} />
+              <div className="bg-rose-500 transition-all duration-500" style={{ width: `${latePercent || 33}%` }} />
+              <div className="bg-slate-700 transition-all duration-500" style={{ width: `${uncompletedPercent || 34}%` }} />
             </div>
           </div>
 
           <div className="bg-[#0A0A0F] border border-slate-800 rounded-lg p-3 text-xs text-slate-400 flex items-start gap-2">
             <ShieldAlert className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5 animate-pulse" />
             <span className="font-sans leading-relaxed">
-              Your on-time completion score is healthy. CLUTCH suggests booking an extra 1.5h buffer session next week to mitigate potential deadline risks.
+              CLUTCH suggests booking an extra 1.5h buffer session each week to mitigate potential deadline risks.
             </span>
           </div>
         </div>
 
       </div>
 
-      {/* CLUTCH Actions Log */}
+      {/* Placeholder action log — real implementation requires a logs collection */}
       <div className="bg-[#12121A] border border-[#1E1E2E] rounded-xl p-6 space-y-4 shadow-md">
         <div className="flex items-center gap-2">
           <Activity className="w-4 h-4 text-indigo-400" />
@@ -272,21 +253,10 @@ export default function AnalyticsPage() {
           </h3>
         </div>
 
-        <div className="overflow-y-auto max-h-[300px] border border-slate-800 rounded-xl bg-[#0A0A0F] divide-y divide-slate-800">
-          {actions.length === 0 ? (
-            <div className="p-8 text-center text-xs text-slate-500 font-mono">
-              No logged actions recorded yet.
-            </div>
-          ) : (
-            actions.map((act) => (
-              <div key={act.id} className="p-3.5 flex items-start justify-between gap-4 hover:bg-slate-900/40 transition">
-                <span className="text-xs text-slate-300 font-sans leading-relaxed">{act.text}</span>
-                <span className="text-[10px] text-slate-500 font-mono shrink-0">
-                  {new Date(act.timestamp).toLocaleDateString()}
-                </span>
-              </div>
-            ))
-          )}
+        <div className="border border-slate-800 rounded-xl bg-[#0A0A0F]">
+          <div className="p-8 text-center text-xs text-slate-500 font-mono">
+            No logged actions recorded yet. Actions will appear here as CLUTCH schedules sessions and detects risks.
+          </div>
         </div>
       </div>
 

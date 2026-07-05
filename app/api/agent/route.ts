@@ -1,93 +1,123 @@
 import { NextRequest } from 'next/server';
+import { clutchAgent } from '@/lib/agent/agent';
+import { adminDb } from '@/lib/firebase/admin';
+import { AgentMessage } from '@/lib/types';
+import { FieldValue } from 'firebase-admin/firestore';
 
 export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
   try {
-    const { message } = await req.json();
+    const { message, userId, conversationId: existingConvId } = await req.json();
+
+    if (!message || !userId) {
+      return new Response(JSON.stringify({ error: 'Missing message or userId' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    // ── Conversation persistence (admin SDK bypasses security rules) ──────────
+    let convId: string = existingConvId || '';
+
+    if (adminDb) {
+      try {
+        if (!convId) {
+          const convRef = adminDb.collection('conversations').doc();
+          await convRef.set({ userId, messages: [], createdAt: new Date() });
+          convId = convRef.id;
+        }
+
+        // Persist incoming user message
+        await adminDb.collection('conversations').doc(convId).update({
+          messages: FieldValue.arrayUnion({
+            role: 'user',
+            content: message,
+            timestamp: new Date(),
+          }),
+        });
+      } catch (dbErr) {
+        console.warn('Conversation persistence failed (non-fatal):', dbErr);
+        convId = convId || crypto.randomUUID();
+      }
+    } else {
+      convId = convId || crypto.randomUUID();
+    }
+
+    // ── Load history ──────────────────────────────────────────────────────────
+    let history: AgentMessage[] = [];
+    if (adminDb && convId) {
+      try {
+        const convSnap = await adminDb.collection('conversations').doc(convId).get();
+        const raw = convSnap.data()?.messages || [];
+        // Exclude the message we just appended — it will be passed as userMessage
+        history = raw
+          .slice(0, -1)
+          .map((m: any) => ({
+            role: m.role,
+            content: m.content,
+            timestamp: m.timestamp?.toDate ? m.timestamp.toDate() : new Date(m.timestamp || Date.now()),
+          }))
+          .slice(-20); // last 20 messages as context window
+      } catch (historyErr) {
+        console.warn('History load failed (non-fatal):', historyErr);
+      }
+    }
+
+    // ── Stream from real Gemini agent ─────────────────────────────────────────
     const encoder = new TextEncoder();
+    let assistantContent = '';
 
     const stream = new ReadableStream({
       async start(controller) {
-        const sendEvent = (obj: any) => {
-          controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
+        const sendEvent = (obj: Record<string, unknown>) => {
+          try {
+            controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
+          } catch {
+            // Controller may already be closed if the client disconnected
+          }
         };
 
-        const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
-
-        // 1. Simulating initial tool calls
-        if (message.toLowerCase().includes('battle plan')) {
-          sendEvent({ type: 'tool_call', name: 'scan_calendar' });
-          await sleep(1000);
-          sendEvent({ type: 'tool_result', name: 'scan_calendar', summary: 'Scanned 5 calendar events' });
-
-          sendEvent({ type: 'tool_call', name: 'find_free_slots' });
-          await sleep(800);
-          sendEvent({ type: 'tool_result', name: 'find_free_slots', summary: 'Found 4 open focus slots' });
-
-          sendEvent({ type: 'tool_call', name: 'generate_battle_plan' });
-          await sleep(1200);
-          sendEvent({ type: 'tool_result', name: 'generate_battle_plan', summary: 'Constructed optimal 6h block calendar roadmap' });
-
-          sendEvent({ type: 'text', text: 'I have successfully analyzed your schedule and built your **Battle Plan** for this week!\n\n' });
-          await sleep(400);
-          sendEvent({ type: 'text', text: 'Here is what I accomplished:\n' });
-          await sleep(300);
-          sendEvent({ type: 'text', text: '- **Identified Focus Windows**: Slotted sessions during your peak energy hours.\n' });
-          await sleep(300);
-          sendEvent({ type: 'text', text: '- **Handled Collisions**: No overlap with existing work meetings.\n' });
-          await sleep(300);
-          sendEvent({ type: 'text', text: '- **Crisis Prevention**: Highlighted tasks at risk and added 1.5h buffer.\n\n' });
-          await sleep(400);
-          sendEvent({ type: 'text', text: 'You can review the full visual breakdown under the **Battle Plan** tab and click "Add All to Calendar" to sync them instantly!' });
-
-        } else if (message.toLowerCase().includes('gmail') || message.toLowerCase().includes('email')) {
-          sendEvent({ type: 'tool_call', name: 'scan_gmail_for_deadlines' });
-          await sleep(1500);
-          sendEvent({ type: 'tool_result', name: 'scan_gmail_for_deadlines', summary: 'Flagged 2 high-priority commitments' });
-
-          sendEvent({ type: 'text', text: 'I completed a deep scan of your priority Gmail inbox.\n\n' });
-          await sleep(450);
-          sendEvent({ type: 'text', text: 'I detected **two critical commitments** that require immediate tracking:\n\n' });
-          await sleep(350);
-          sendEvent({ type: 'text', text: '1. **Server Migration Cutover** (Due Monday at 9:00 AM)\n' });
-          await sleep(300);
-          sendEvent({ type: 'text', text: '2. **Review User Feedback Docs** (Due Tuesday at 5:00 PM)\n\n' });
-          await sleep(400);
-          sendEvent({ type: 'text', text: 'I can import these directly into your active dashboard objectives or draft appropriate extension negotiation templates. Which would you prefer?' });
-
-        } else if (message.toLowerCase().includes('risk') || message.toLowerCase().includes('most at risk')) {
-          sendEvent({ type: 'tool_call', name: 'analyze_deadline_risk' });
-          await sleep(1200);
-          sendEvent({ type: 'tool_result', name: 'analyze_deadline_risk', summary: 'Risk index escalated for Q3 analysis' });
-
-          sendEvent({ type: 'text', text: 'Here is your current deadline threat assessment:\n\n' });
-          await sleep(400);
-          sendEvent({ type: 'text', text: '⚠️ **Analyze Quarter 3 Deadline Risks** is highly at risk. You only have **8 hours** remaining until its deadline, with an estimated **3.5 hours** of focused work left to do.\n\n' });
-          await sleep(450);
-          sendEvent({ type: 'text', text: 'I strongly recommend generating a custom Battle Plan right now to secure a slot on your calendar and complete this objective on time.' });
-
-        } else {
-          // Standard generic help assistant reply
-          sendEvent({ type: 'tool_call', name: 'get_all_tasks' });
-          await sleep(800);
-          sendEvent({ type: 'tool_result', name: 'get_all_tasks', summary: 'Found 3 active objectives' });
-
-          sendEvent({ type: 'text', text: 'Hello! I am **CLUTCH**, your high-stakes workspace risk controller.\n\n' });
-          await sleep(400);
-          sendEvent({ type: 'text', text: 'I am fully integrated with your calendar and email. Here is what I can do:\n\n' });
-          await sleep(300);
-          sendEvent({ type: 'text', text: '- **Automated Scheduling**: Book focus sessions on Google Calendar.\n' });
-          await sleep(300);
-          sendEvent({ type: 'text', text: '- **Inbox Risk Scanning**: Find hidden deadlines inside your emails.\n' });
-          await sleep(300);
-          sendEvent({ type: 'text', text: '- **Defensive Planning**: Help you manage high-stakes deadlines and prevent overflows.\n\n' });
-          await sleep(450);
-          sendEvent({ type: 'text', text: 'Let me know how we can keep your workspace on track today!' });
+        try {
+          for await (const event of clutchAgent.runStream(userId, message, history)) {
+            switch (event.type) {
+              case 'text':
+                assistantContent += event.content;
+                // Serialize as 'text' key — the client hook reads event.text
+                sendEvent({ type: 'text', text: event.content });
+                break;
+              case 'tool_call':
+                sendEvent({ type: 'tool_call', name: event.name });
+                break;
+              case 'tool_result':
+                sendEvent({ type: 'tool_result', name: event.name, summary: event.summary });
+                break;
+              case 'error':
+                sendEvent({ type: 'error', message: event.message });
+                break;
+            }
+          }
+        } catch (streamErr: any) {
+          console.error('Agent stream error:', streamErr);
+          sendEvent({ type: 'error', message: streamErr.message || 'Agent stream failed' });
+        } finally {
+          // Persist the complete assistant response
+          if (assistantContent.trim() && adminDb && convId) {
+            try {
+              await adminDb.collection('conversations').doc(convId).update({
+                messages: FieldValue.arrayUnion({
+                  role: 'assistant',
+                  content: assistantContent,
+                  timestamp: new Date(),
+                }),
+              });
+            } catch (saveErr) {
+              console.warn('Failed to persist assistant message (non-fatal):', saveErr);
+            }
+          }
+          controller.close();
         }
-
-        controller.close();
-      }
+      },
     });
 
     return new Response(stream, {
@@ -95,11 +125,11 @@ export async function POST(req: NextRequest) {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
-        'X-Conversation-Id': crypto.randomUUID(),
+        'X-Conversation-Id': convId,
       },
     });
   } catch (e: any) {
-    console.error('Failed in agent chat API:', e);
+    console.error('Agent route error:', e);
     return new Response(JSON.stringify({ error: e.message || 'Internal error' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },

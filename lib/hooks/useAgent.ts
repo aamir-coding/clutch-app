@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useUiStore } from '@/lib/stores/uiStore';
+import { useAuth } from '@/components/layout/AuthProvider';
 
 export interface AgentMessage {
   id: string;
@@ -10,6 +11,7 @@ export interface AgentMessage {
 }
 
 export function useAgent() {
+  const { user } = useAuth();
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,14 +23,14 @@ export function useAgent() {
   const clearToolCalls = useUiStore((state: any) => state.clearToolCalls);
 
   const sendMessage = async (userMessage: string) => {
-    const newUserMsg: AgentMessage = { 
-      id: crypto.randomUUID(), 
-      role: 'user', 
-      content: userMessage, 
-      toolCalls: [], 
-      timestamp: new Date() 
+    const newUserMsg: AgentMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: userMessage,
+      toolCalls: [],
+      timestamp: new Date()
     };
-    
+
     setMessages(prev => [...prev, newUserMsg]);
     setLoading(true);
     if (setAgentThinking) setAgentThinking(true);
@@ -36,23 +38,24 @@ export function useAgent() {
     setError(null);
 
     try {
+      const userId = user?.uid ?? 'guest';
       const response = await fetch('/api/agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMessage, userId: 'default_user', conversationId })
+        body: JSON.stringify({ message: userMessage, userId, conversationId })
       });
 
       if (!response.ok) throw new Error('Network response was not ok');
-      
+
       const newConversationId = response.headers.get('X-Conversation-Id');
       if (newConversationId) setConversationId(newConversationId);
 
-      const assistantMessage: AgentMessage = { 
-        id: crypto.randomUUID(), 
-        role: 'assistant', 
-        content: '', 
-        toolCalls: [], 
-        timestamp: new Date() 
+      const assistantMessage: AgentMessage = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: '',
+        toolCalls: [],
+        timestamp: new Date()
       };
       setMessages(prev => [...prev, assistantMessage]);
 
@@ -63,7 +66,7 @@ export function useAgent() {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        
+
         const chunk = decoder.decode(value, { stream: true });
         const lines = chunk.split('\n').filter(l => l.trim() !== '');
 
@@ -87,9 +90,6 @@ export function useAgent() {
       }
     } catch (e: any) {
       setError(e.message || 'Failed to send message');
-      setLoading(false);
-      if (setAgentThinking) setAgentThinking(false);
-      if (clearToolCalls) clearToolCalls();
     } finally {
       setLoading(false);
       if (setAgentThinking) setAgentThinking(false);

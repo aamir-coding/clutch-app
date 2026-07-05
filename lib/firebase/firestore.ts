@@ -88,7 +88,9 @@ function mapUser(uid: string, data: any): User {
     avgTaskSpeed: data.avgTaskSpeed ?? 1.0,
     fcmTokens: data.fcmTokens || [],
     tokens: data.tokens || null,
-    createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate() : new Date(data.createdAt || Date.now())
+    createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate() : new Date(data.createdAt || Date.now()),
+    notificationPreferences: data.notificationPreferences,
+    agentBehavior: data.agentBehavior,
   };
 }
 
@@ -467,10 +469,7 @@ export class FirestoreService {
         firestoreData.actualEnd = Timestamp.fromDate(session.actualEnd);
       }
       const docRef = await addDoc(collection(db, path), firestoreData);
-      return {
-        ...session,
-        id: docRef.id
-      };
+      return { ...session, id: docRef.id };
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, path);
     }
@@ -560,9 +559,7 @@ export class FirestoreService {
   async markSessionSkipped(sessionId: string): Promise<void> {
     const path = `sessions/${sessionId}`;
     try {
-      await updateDoc(doc(db, 'sessions', sessionId), {
-        skipped: true
-      });
+      await updateDoc(doc(db, 'sessions', sessionId), { skipped: true });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     }
@@ -700,12 +697,7 @@ export class FirestoreService {
     try {
       const docSnap = await getDoc(doc(db, 'impact', userId));
       if (!docSnap.exists()) {
-        return {
-          tasksSaved: 0,
-          hoursRecovered: 0,
-          onTimeRate: 0,
-          currentStreak: 0
-        };
+        return { tasksSaved: 0, hoursRecovered: 0, onTimeRate: 0, currentStreak: 0 };
       }
       const data = docSnap.data();
       return {
@@ -724,14 +716,12 @@ export class FirestoreService {
     try {
       const stats = await this.getImpactStats(userId);
       const totalCompletions = stats.tasksSaved;
-      
       const newTotal = totalCompletions + 1;
       const currentOnTimeCount = stats.onTimeRate * totalCompletions;
       const newOnTimeCount = currentOnTimeCount + (wasOnTime ? 1 : 0);
       const newOnTimeRate = newTotal > 0 ? newOnTimeCount / newTotal : 0;
-      
       const newStreak = wasOnTime ? stats.currentStreak + 1 : 0;
-      
+
       await setDoc(doc(db, 'impact', userId), {
         tasksSaved: increment(1),
         onTimeRate: newOnTimeRate,

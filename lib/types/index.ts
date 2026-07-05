@@ -1,11 +1,23 @@
+export interface NotificationPreferences {
+  crisisAlerts: boolean;
+  morningBriefing: boolean;
+  schedulingNudges: boolean;
+}
+
+export interface AgentBehaviorPreferences {
+  autoSchedule: boolean;
+  autoScanGmail: boolean;
+  sessionLength: number;
+}
+
 export interface User {
   uid: string;
   email: string;
   displayName: string;
   photoURL: string;
   workHours: {
-    start: string; // '09:00'
-    end: string;   // '18:00'
+    start: string;
+    end: string;
   };
   productiveHours: string[];
   avgTaskSpeed: number;
@@ -16,6 +28,8 @@ export interface User {
     expiresAt: number;
   } | null;
   createdAt: Date;
+  notificationPreferences?: NotificationPreferences;
+  agentBehavior?: AgentBehaviorPreferences;
 }
 
 export interface Task {

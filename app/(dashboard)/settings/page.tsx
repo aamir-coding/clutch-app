@@ -2,62 +2,59 @@
 
 import React, { useState, useEffect } from 'react';
 import { useUiStore } from '@/lib/stores/uiStore';
-import { firestoreService, UserProfile } from '@/lib/firebase/firestoreService';
-import { AuthService, signInWithGoogle, signOut } from '@/lib/firebase/authService';
-import { 
-  Clock, Bell, Cpu, Link as LinkIcon, AlertTriangle, 
-  CheckCircle2, RefreshCw, LogOut, Loader2, Sparkles, Check 
+import { firestoreService } from '@/lib/firebase/firestore';
+import { useAuth } from '@/components/layout/AuthProvider';
+import {
+  Clock, Bell, Cpu, Link as LinkIcon, AlertTriangle,
+  CheckCircle2, Loader2, LogOut, Check
 } from 'lucide-react';
 
 export default function SettingsPage() {
   const setPageTitle = useUiStore((state: any) => state.setPageTitle);
-  const userId = 'default_user';
+  const { user, signIn, signOut } = useAuth();
+  const userId = user?.uid ?? null;
 
-  // Loading / saving states
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [clearing, setClearing] = useState(false);
 
-  // Form State
   const [workStart, setWorkStart] = useState('09:00');
   const [workEnd, setWorkEnd] = useState('18:00');
   const [productiveHours, setProductiveHours] = useState<string[]>([]);
-  
-  // Notification Toggles
+
   const [crisisAlerts, setCrisisAlerts] = useState(true);
   const [morningBriefing, setMorningBriefing] = useState(true);
   const [schedulingNudges, setSchedulingNudges] = useState(true);
 
-  // Agent Behavior
   const [autoSchedule, setAutoSchedule] = useState(false);
   const [autoScanGmail, setAutoScanGmail] = useState(false);
   const [sessionLength, setSessionLength] = useState(60);
 
-  // Load Settings on Mount
   useEffect(() => {
     if (setPageTitle) {
       setPageTitle('Settings');
     }
 
     const loadSettings = async () => {
+      if (!userId) return;
       try {
         setLoading(true);
-        const user = await firestoreService.getUser(userId);
-        if (user) {
-          setWorkStart(user.workStart || '09:00');
-          setWorkEnd(user.workEnd || '18:00');
-          setProductiveHours(user.productiveHours || ['morning', 'afternoon']);
-          
-          if (user.notificationPreferences) {
-            setCrisisAlerts(user.notificationPreferences.crisisAlerts);
-            setMorningBriefing(user.notificationPreferences.morningBriefing);
-            setSchedulingNudges(user.notificationPreferences.schedulingNudges);
+        const userData = await firestoreService.getUser(userId);
+        if (userData) {
+          setWorkStart(userData.workHours?.start || '09:00');
+          setWorkEnd(userData.workHours?.end || '18:00');
+          setProductiveHours(userData.productiveHours || ['morning', 'afternoon']);
+
+          if (userData.notificationPreferences) {
+            setCrisisAlerts(userData.notificationPreferences.crisisAlerts);
+            setMorningBriefing(userData.notificationPreferences.morningBriefing);
+            setSchedulingNudges(userData.notificationPreferences.schedulingNudges);
           }
-          if (user.agentBehavior) {
-            setAutoSchedule(user.agentBehavior.autoSchedule);
-            setAutoScanGmail(user.agentBehavior.autoScanGmail);
-            setSessionLength(user.agentBehavior.sessionLength || 60);
+          if (userData.agentBehavior) {
+            setAutoSchedule(userData.agentBehavior.autoSchedule);
+            setAutoScanGmail(userData.agentBehavior.autoScanGmail);
+            setSessionLength(userData.agentBehavior.sessionLength || 60);
           }
         }
       } catch (e) {
@@ -68,18 +65,16 @@ export default function SettingsPage() {
     };
 
     loadSettings();
-  }, [setPageTitle]);
+  }, [setPageTitle, userId]);
 
-  // Handle Save (Work Hours & Productive Hours)
   const handleSaveWorkSchedule = async () => {
+    if (!userId) return;
     try {
       setSaving(true);
       await firestoreService.updateUser(userId, {
-        workStart,
-        workEnd,
+        workHours: { start: workStart, end: workEnd },
         productiveHours,
-        workHours: { workStart, workEnd }
-      } as any);
+      });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -89,8 +84,8 @@ export default function SettingsPage() {
     }
   };
 
-  // Instant notification preference save
   const handleNotificationChange = async (prefKey: string, val: boolean) => {
+    if (!userId) return;
     const nextPrefs = {
       crisisAlerts: prefKey === 'crisisAlerts' ? val : crisisAlerts,
       morningBriefing: prefKey === 'morningBriefing' ? val : morningBriefing,
@@ -102,16 +97,14 @@ export default function SettingsPage() {
     if (prefKey === 'schedulingNudges') setSchedulingNudges(val);
 
     try {
-      await firestoreService.updateUser(userId, {
-        notificationPreferences: nextPrefs
-      });
+      await firestoreService.updateUser(userId, { notificationPreferences: nextPrefs });
     } catch (e) {
       console.error('Failed to update notification preferences:', e);
     }
   };
 
-  // Instant agent behavior preference save
   const handleAgentBehaviorChange = async (prefKey: string, val: any) => {
+    if (!userId) return;
     const nextBehavior = {
       autoSchedule: prefKey === 'autoSchedule' ? val : autoSchedule,
       autoScanGmail: prefKey === 'autoScanGmail' ? val : autoScanGmail,
@@ -123,34 +116,29 @@ export default function SettingsPage() {
     if (prefKey === 'sessionLength') setSessionLength(val);
 
     try {
-      await firestoreService.updateUser(userId, {
-        agentBehavior: nextBehavior
-      });
+      await firestoreService.updateUser(userId, { agentBehavior: nextBehavior });
     } catch (e) {
       console.error('Failed to update agent behavior preferences:', e);
     }
   };
 
-  // Toggle productive hours selection
   const handleToggleProductive = (hour: string) => {
     setProductiveHours((prev) =>
       prev.includes(hour) ? prev.filter((h) => h !== hour) : [...prev, hour]
     );
   };
 
-  // Reconnect Google Accs
   const handleReconnect = async (service: string) => {
     try {
-      console.log(`Reconnecting to ${service}...`);
-      await signInWithGoogle();
+      await signIn();
       alert(`${service} reconnected successfully.`);
     } catch (e) {
-      console.error(e);
+      console.error('Reconnect failed:', e);
     }
   };
 
-  // Danger Zone Wipes
   const handleClearAllTasks = async () => {
+    if (!userId) return;
     const confirmed = window.confirm(
       '⚠️ CRITICAL: Are you sure you want to delete all tasks? This action is permanent and cannot be undone.'
     );
@@ -160,7 +148,7 @@ export default function SettingsPage() {
       setClearing(true);
       const tasks = await firestoreService.getTasks(userId);
       for (const t of tasks) {
-        await firestoreService.deleteTask(userId, t.id);
+        await firestoreService.deleteTask(t.id);
       }
       alert('All tasks have been successfully cleared.');
       window.location.reload();
@@ -178,18 +166,17 @@ export default function SettingsPage() {
     }
   };
 
-  // Custom UI components
   const Switch = ({ checked, onChange }: { checked: boolean; onChange: (val: boolean) => void }) => (
     <button
       type="button"
       onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-5.5 w-10 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+      className={`relative inline-flex h-5 w-10 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
         checked ? 'bg-indigo-600' : 'bg-slate-800'
       }`}
     >
       <span
-        className={`pointer-events-none inline-block h-4.5 w-4.5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
-          checked ? 'translate-x-4.5' : 'translate-x-0'
+        className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+          checked ? 'translate-x-5' : 'translate-x-0'
         }`}
       />
     </button>
@@ -212,14 +199,14 @@ export default function SettingsPage() {
       </div>
 
       <div className="space-y-8 bg-[#0A0A0F] border border-[#1E1E2E] rounded-2xl p-6 md:p-8">
-        
+
         {/* Section 1: Work Schedule */}
         <section className="space-y-5">
           <div className="flex items-center gap-2">
             <Clock className="w-4 h-4 text-indigo-400" />
             <h2 className="text-xs font-bold text-white uppercase tracking-wider font-mono">1. Work Schedule</h2>
           </div>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pl-6">
             <div>
               <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono mb-2">Work Start</label>
@@ -230,7 +217,6 @@ export default function SettingsPage() {
                 className="w-full bg-[#13131E] border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 transition"
               />
             </div>
-            
             <div>
               <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono mb-2">Work End</label>
               <input
@@ -284,7 +270,6 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        {/* Divider */}
         <div className="border-t border-slate-850/60 my-6" />
 
         {/* Section 2: Notifications */}
@@ -293,7 +278,7 @@ export default function SettingsPage() {
             <Bell className="w-4 h-4 text-indigo-400" />
             <h2 className="text-xs font-bold text-white uppercase tracking-wider font-mono">2. Notification Toggles</h2>
           </div>
-          
+
           <div className="space-y-4 pl-6">
             <div className="flex items-center justify-between p-3.5 bg-[#12121A] border border-slate-900 rounded-xl">
               <div>
@@ -321,7 +306,6 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        {/* Divider */}
         <div className="border-t border-slate-850/60 my-6" />
 
         {/* Section 3: Agent Behavior */}
@@ -330,7 +314,7 @@ export default function SettingsPage() {
             <Cpu className="w-4 h-4 text-indigo-400" />
             <h2 className="text-xs font-bold text-white uppercase tracking-wider font-mono">3. Agent Behavior</h2>
           </div>
-          
+
           <div className="space-y-4 pl-6">
             <div className="flex items-center justify-between p-3.5 bg-[#12121A] border border-slate-900 rounded-xl">
               <div>
@@ -353,7 +337,6 @@ export default function SettingsPage() {
                 <p className="text-xs font-bold text-slate-200">Session Length Preference</p>
                 <p className="text-[10px] text-slate-500 mt-0.5">Configure your default duration for scheduled work sessions.</p>
               </div>
-              
               <div className="flex bg-[#0A0A0F] border border-slate-800 p-1 rounded-xl w-fit">
                 {[30, 60, 90, 120].map((len) => (
                   <button
@@ -373,7 +356,6 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        {/* Divider */}
         <div className="border-t border-slate-850/60 my-6" />
 
         {/* Section 4: Connected Accounts */}
@@ -382,7 +364,7 @@ export default function SettingsPage() {
             <LinkIcon className="w-4 h-4 text-indigo-400" />
             <h2 className="text-xs font-bold text-white uppercase tracking-wider font-mono">4. Connected Accounts</h2>
           </div>
-          
+
           <div className="space-y-3 pl-6">
             {[
               { name: 'Google Calendar', desc: 'Syncs focus sessions and handles conflict check.' },
@@ -399,7 +381,6 @@ export default function SettingsPage() {
                     <p className="text-[10px] text-slate-500 mt-0.5">{acc.desc}</p>
                   </div>
                 </div>
-                
                 <button
                   onClick={() => handleReconnect(acc.name)}
                   className="bg-slate-800 hover:bg-slate-700 transition text-slate-300 hover:text-white px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider cursor-pointer font-mono"
@@ -411,16 +392,15 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        {/* Divider */}
         <div className="border-t border-slate-850/60 my-6" />
 
         {/* Section 5: Danger Zone */}
-        <section className="space-y-4 p-4.5 border border-red-500/10 bg-red-500/5 rounded-2xl">
+        <section className="space-y-4 p-4 border border-red-500/10 bg-red-500/5 rounded-2xl">
           <div className="flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-red-400 animate-pulse" />
             <h2 className="text-xs font-bold text-red-400 uppercase tracking-wider font-mono">5. Danger Zone</h2>
           </div>
-          
+
           <div className="flex flex-col sm:flex-row gap-3 pl-6">
             <button
               onClick={handleClearAllTasks}

@@ -2,7 +2,6 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { useAuth } from '@/components/layout/AuthProvider';
-import { TaskSession } from '@/lib/firebase/firestoreService';
 
 export interface CalendarEvent {
   id: string;
@@ -11,13 +10,28 @@ export interface CalendarEvent {
   end: string;
 }
 
+/**
+ * Shape returned by /api/calendar for scheduled focus sessions.
+ * Deliberately separate from the real-Firestore TaskSession (lib/types)
+ * because the calendar API route returns a simplified mock shape that
+ * matches what TodayPlan and the Timeline page actually render.
+ */
+export interface CalendarSession {
+  id: string;
+  taskId: string;
+  taskTitle: string;
+  start: string;   // ISO string
+  end: string;     // ISO string
+  durationHours: number;
+  status: 'scheduled' | 'completed' | 'missed';
+}
+
 export function useCalendar() {
   const { user } = useAuth();
   const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [sessions, setSessions] = useState<TaskSession[]>([]);
+  const [sessions, setSessions] = useState<CalendarSession[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Keep track of last fetched range to allow automatic re-fetching
   const lastRangeRef = useRef<{ start: Date; end: Date } | null>(null);
 
   const fetchForDateRange = useCallback(async (start: Date, end: Date) => {
@@ -39,10 +53,9 @@ export function useCalendar() {
       if (res.ok) {
         const data = await res.json();
         setEvents(data.events || []);
-        // Adapt response: if there's sessions, use it. Fallback to freeSlots.
         setSessions(data.sessions || data.freeSlots || []);
       } else {
-        console.error('Failed to fetch calendar data');
+        console.error('Failed to fetch calendar data', res.status);
       }
     } catch (e) {
       console.error('Error fetching calendar range:', e);
@@ -60,33 +73,19 @@ export function useCalendar() {
     try {
       const res = await fetch('/api/calendar/schedule', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          taskId,
-          taskName,
-          durationMinutes,
-          startTime
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId, taskName, durationMinutes, startTime }),
       });
 
       if (res.ok) {
         const data = await res.json();
-
-        // On success: re-fetch events for current week range
         if (lastRangeRef.current) {
           await fetchForDateRange(lastRangeRef.current.start, lastRangeRef.current.end);
         }
-
-        return {
-          success: true,
-          sessionTime: data.sessionTime
-        };
+        return { success: true, sessionTime: data.sessionTime };
       } else if (res.status === 422) {
         return { success: false };
       }
-
       return { success: false };
     } catch (e) {
       console.error('Error scheduling session:', e);
@@ -94,11 +93,5 @@ export function useCalendar() {
     }
   }, [fetchForDateRange]);
 
-  return {
-    events,
-    sessions,
-    loading,
-    fetchForDateRange,
-    scheduleSession
-  };
+  return { events, sessions, loading, fetchForDateRange, scheduleSession };
 }
