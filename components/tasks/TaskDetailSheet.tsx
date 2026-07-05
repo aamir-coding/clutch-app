@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Calendar, AlertTriangle, ShieldCheck, Plus, CheckCircle2, Circle, Clock, Mail, Trash2, Loader2 } from 'lucide-react';
-import { firestoreService, Task, TaskSession } from '@/lib/firebase/firestoreService';
+import { X, Calendar, Plus, CheckCircle2, Circle, Clock, Mail, Trash2, Loader2 } from 'lucide-react';
+import { firestoreService } from '@/lib/firebase/firestore';
+import { Task, TaskSession } from '@/lib/types';
 
 interface TaskDetailSheetProps {
   task: Task | null;
@@ -59,6 +60,8 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
 
   if (!task || !open) return null;
 
+  const subtasks = task.subtasks || [];
+
   // Title edit handler
   const handleTitleBlur = () => {
     setIsEditingTitle(false);
@@ -75,7 +78,7 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
 
   // Subtask handlers
   const handleToggleSubtask = (subId: string) => {
-    const updatedSubtasks = task.subtasks.map((st) =>
+    const updatedSubtasks = subtasks.map((st) =>
       st.id === subId ? { ...st, done: !st.done } : st
     );
     onUpdate({ subtasks: updatedSubtasks });
@@ -89,7 +92,7 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
       title: newSubtaskText.trim(),
       done: false,
     };
-    onUpdate({ subtasks: [...task.subtasks, newSub] });
+    onUpdate({ subtasks: [...subtasks, newSub] });
     setNewSubtaskText('');
   };
 
@@ -107,20 +110,21 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
     }
   };
 
-  // Simulate Calendar Session Scheduling
+  // Simulate Calendar Session Scheduling (UI-only — does not persist to
+  // Firestore or Google Calendar; use the Battle Plan / Timeline flows for
+  // real session booking)
   const handleScheduleNewSession = async () => {
     setSchedulingSession(true);
     try {
-      // POST mock request or timeout
       await new Promise((res) => setTimeout(res, 1200));
       const newSession: TaskSession = {
         id: crypto.randomUUID(),
         taskId: task.id,
-        taskTitle: task.title,
-        start: new Date(Date.now() + 3600 * 1000).toISOString(),
-        end: new Date(Date.now() + 3 * 3600 * 1000).toISOString(),
-        durationHours: 2,
-        status: 'scheduled'
+        userId: task.userId,
+        scheduledStart: new Date(Date.now() + 3600 * 1000),
+        scheduledEnd: new Date(Date.now() + 3 * 3600 * 1000),
+        completed: false,
+        skipped: false,
       };
       setSessions((prev) => [...prev, newSession]);
     } catch (e) {
@@ -131,9 +135,10 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
   };
 
   // Deadline calculation details
-  const deadlineDate = new Date(task.deadline);
+  const deadlineDate = task.deadline;
   const hoursLeft = Math.max(0, (deadlineDate.getTime() - Date.now()) / (3600 * 1000));
-  const workHoursRemaining = Math.max(0.5, task.estimatedHours * (1 - task.progressPercent / 100));
+  const estimatedHours = task.estimatedHours ?? 2;
+  const workHoursRemaining = Math.max(0.5, estimatedHours * (1 - task.progressPercent / 100));
 
   // Risk levels
   const riskScore = hoursLeft > 0 ? Math.min(100, Math.round((workHoursRemaining / hoursLeft) * 100)) : 100;
@@ -151,8 +156,8 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
     riskBarBg = 'bg-amber-500';
   }
 
-  const subtasksCompleted = task.subtasks.filter((s) => s.done).length;
-  const subtasksTotal = task.subtasks.length;
+  const subtasksCompleted = subtasks.filter((s) => s.done).length;
+  const subtasksTotal = subtasks.length;
 
   return (
     <>
@@ -294,7 +299,7 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
             </div>
 
             <div className="space-y-1.5">
-              {task.subtasks.map((st) => (
+              {subtasks.map((st) => (
                 <div 
                   key={st.id} 
                   onClick={() => handleToggleSubtask(st.id)}
@@ -345,23 +350,28 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
               </div>
             ) : (
               <div className="space-y-2">
-                {sessions.map((sess) => (
-                  <div key={sess.id} className="bg-[#0A0A0F]/60 border border-slate-850 p-3 rounded-lg flex items-center justify-between gap-3 text-xs">
-                    <div className="space-y-0.5">
-                      <div className="flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5 text-indigo-400" />
-                        <span className="font-bold text-slate-300">Focus Slot</span>
+                {sessions.map((sess) => {
+                  const durationHours = (sess.scheduledEnd.getTime() - sess.scheduledStart.getTime()) / (3600 * 1000);
+                  return (
+                    <div key={sess.id} className="bg-[#0A0A0F]/60 border border-slate-850 p-3 rounded-lg flex items-center justify-between gap-3 text-xs">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                          <span className="font-bold text-slate-300">
+                            {sess.completed ? 'Completed Slot' : sess.skipped ? 'Skipped Slot' : 'Focus Slot'}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-500 font-mono">
+                          {sess.scheduledStart.toLocaleDateString()} • {sess.scheduledStart.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                        </p>
                       </div>
-                      <p className="text-[10px] text-slate-500 font-mono">
-                        {new Date(sess.start).toLocaleDateString()} • {new Date(sess.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-                      </p>
-                    </div>
 
-                    <span className="text-[10px] font-bold text-slate-400 bg-slate-800 rounded px-2 py-0.5">
-                      {sess.durationHours}h Block
-                    </span>
-                  </div>
-                ))}
+                      <span className="text-[10px] font-bold text-slate-400 bg-slate-800 rounded px-2 py-0.5">
+                        {durationHours.toFixed(1)}h Block
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             )}
 

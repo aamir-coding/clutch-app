@@ -3,17 +3,22 @@
 import React, { useState, useEffect } from 'react';
 import { useUiStore } from '@/lib/stores/uiStore';
 import { useTasks } from '@/lib/hooks/useTasks';
-import { firestoreService, Task } from '@/lib/firebase/firestoreService';
+import { useAuth } from '@/components/layout/AuthProvider';
+import { firestoreService } from '@/lib/firebase/firestore';
+import { Task, User } from '@/lib/types';
 import OnboardingWizard from '@/components/layout/OnboardingWizard';
 import AtRiskPanel from '@/components/dashboard/AtRiskPanel';
 import TodayPlan, { TaskSession, CalendarEvent } from '@/components/dashboard/TodayPlan';
 import ImpactStats, { ImpactStatsType } from '@/components/dashboard/ImpactStats';
 import TaskCard from '@/components/tasks/TaskCard';
 import { TaskDetailSheet, AddTaskModal, GmailScanModal } from '@/components/dashboard/Modals';
-import { Mail, Map, Plus, ShieldAlert, Sparkles, Filter, RefreshCw, Calendar, Zap, LayoutGrid } from 'lucide-react';
+import { Mail, Map, Plus, ShieldAlert, Sparkles, RefreshCw, LayoutGrid } from 'lucide-react';
 
 export default function DashboardPage() {
   const setPageTitle = useUiStore((state: any) => state.setPageTitle);
+  const { user } = useAuth();
+  const userId = user?.uid ?? null;
+
   const { tasks, loading, atRiskTasks, refetch, updateTask, deleteTask, createTask } = useTasks();
 
   // Component States
@@ -21,9 +26,9 @@ export default function DashboardPage() {
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [impactStats, setImpactStats] = useState<ImpactStatsType | null>(null);
   const [workHours, setWorkHours] = useState({ workStart: '09:00', workEnd: '18:00' });
-  const [userProfile, setUserProfile] = useState<any>(null);
+  const [userProfile, setUserProfile] = useState<User | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  
+
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [showAddTask, setShowAddTask] = useState(false);
   const [showGmailScan, setShowGmailScan] = useState(false);
@@ -33,9 +38,7 @@ export default function DashboardPage() {
   // Check onboarding eligibility
   useEffect(() => {
     if (!loading && tasks.length === 0 && userProfile) {
-      const createdAt = new Date(userProfile.createdAt).getTime();
-      const now = Date.now();
-      const hoursSinceCreation = (now - createdAt) / (3600 * 1000);
+      const hoursSinceCreation = (Date.now() - userProfile.createdAt.getTime()) / (3600 * 1000);
       if (hoursSinceCreation <= 24) {
         setShowOnboarding(true);
       }
@@ -51,15 +54,14 @@ export default function DashboardPage() {
 
   // Fetch API / Firestore parameters
   const fetchDashboardData = async () => {
+    if (!userId) return;
     try {
       setIsRefreshing(true);
-      const userId = 'default_user';
 
-      const [calendarRes, statsRes, userRes, userProfileRes] = await Promise.all([
+      const [calendarRes, statsRes, userRes] = await Promise.all([
         fetch(`/api/calendar?userId=${userId}`).then((res) => res.json()),
         firestoreService.getImpactStats(userId),
-        firestoreService.getUserWorkHours(userId),
-        firestoreService.getUser(userId)
+        firestoreService.getUser(userId),
       ]);
 
       if (calendarRes) {
@@ -70,10 +72,8 @@ export default function DashboardPage() {
         setImpactStats(statsRes);
       }
       if (userRes) {
-        setWorkHours(userRes);
-      }
-      if (userProfileRes) {
-        setUserProfile(userProfileRes);
+        setWorkHours({ workStart: userRes.workHours.start, workEnd: userRes.workHours.end });
+        setUserProfile(userRes);
       }
     } catch (e) {
       console.error('Error loading dashboard payload:', e);
@@ -83,8 +83,10 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
+    if (!userId) return;
     fetchDashboardData();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   const handleRefreshAll = async () => {
     await Promise.all([refetch(), fetchDashboardData()]);
@@ -93,11 +95,10 @@ export default function DashboardPage() {
   // Task filtering logic
   const filteredTasks = tasks.filter((task) => {
     if (filterTab === 'all') return true;
-    
-    const d = new Date(task.deadline);
-    const now = new Date();
-    const timeDiff = d.getTime() - now.getTime();
-    
+
+    const now = Date.now();
+    const timeDiff = task.deadline.getTime() - now;
+
     if (filterTab === 'today') {
       // Due within 24 hours
       return timeDiff > 0 && timeDiff <= 24 * 60 * 60 * 1000;
@@ -321,6 +322,7 @@ export default function DashboardPage() {
       <GmailScanModal
         open={showGmailScan}
         onClose={() => setShowGmailScan(false)}
+        onCreateTask={createTask}
         onTasksAdded={() => {
           handleRefreshAll();
         }}

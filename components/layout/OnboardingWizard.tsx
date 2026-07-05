@@ -2,8 +2,9 @@
 
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Zap, Clock, Mail, CheckCircle2, ChevronRight, Loader2, X, Check } from 'lucide-react';
-import { firestoreService, Task } from '@/lib/firebase/firestoreService';
+import { Zap, Clock, Mail, ChevronRight, Loader2, X, Check } from 'lucide-react';
+import { firestoreService } from '@/lib/firebase/firestore';
+import { useAuth } from '@/components/layout/AuthProvider';
 
 interface OnboardingWizardProps {
   showOnboarding: boolean;
@@ -12,9 +13,9 @@ interface OnboardingWizardProps {
 }
 
 export default function OnboardingWizard({ showOnboarding, onClose, onRefreshTasks }: OnboardingWizardProps) {
+  const { user } = useAuth();
   const [isOpen, setIsOpen] = useState(showOnboarding);
   const [currentStep, setCurrentStep] = useState(1);
-  const [userId] = useState('default_user');
 
   // Step 1 states
   const [workStart, setWorkStart] = useState('09:00');
@@ -42,18 +43,23 @@ export default function OnboardingWizard({ showOnboarding, onClose, onRefreshTas
   };
 
   const saveStep1 = async () => {
+    if (!user?.uid) {
+      // AuthProvider resolved before the wizard was shown, but guard anyway.
+      setCurrentStep(2);
+      return;
+    }
     try {
-      await firestoreService.updateUser(userId, {
-        workStart,
-        workEnd,
+      // Real User type stores work hours as { start, end }, not workStart/workEnd
+      // at the top level — that was the mock's shape.
+      await firestoreService.updateUser(user.uid, {
+        workHours: { start: workStart, end: workEnd },
         productiveHours,
-        // Also save as workHours nested structure just in case
-        workHours: { workStart, workEnd }
-      } as any);
+      });
       setCurrentStep(2);
     } catch (e) {
       console.error('Failed to save step 1 preferences:', e);
-      setCurrentStep(2); // Progress anyway to avoid blocking
+      // Progress anyway so a transient Firestore error doesn't trap the user.
+      setCurrentStep(2);
     }
   };
 
@@ -64,7 +70,7 @@ export default function OnboardingWizard({ showOnboarding, onClose, onRefreshTas
       if (res.ok) {
         const data = await res.json();
         setScannedTasks(data);
-        // Default select all scanned tasks
+        // Auto-select all by default
         setSelectedTaskIds(data.map((t: any) => t.id));
         setHasScanned(true);
       } else {
@@ -84,21 +90,48 @@ export default function OnboardingWizard({ showOnboarding, onClose, onRefreshTas
   };
 
   const handleAddTasks = async () => {
+    if (!user?.uid) {
+      setCurrentStep(3);
+      return;
+    }
     setAddingTasks(true);
     try {
       const tasksToCreate = scannedTasks.filter((t) => selectedTaskIds.includes(t.id));
+
       for (const t of tasksToCreate) {
-        await firestoreService.createTask(userId, {
-          title: t.title,
-          description: t.description,
-          deadline: t.deadline,
-          estimatedHours: t.estimatedHours,
-          priority: t.priority,
+        // The Gmail scan route returns deadline as an ISO string; convert to Date
+        // and ensure it is always in the future before writing to Firestore.
+        let deadline = t.deadline ? new Date(t.deadline) : new Date();
+        if (isNaN(deadline.getTime()) || deadline <= new Date()) {
+          deadline = new Date(Date.now() + 24 * 3600 * 1000);
+          deadline.setHours(17, 0, 0, 0);
+        }
+
+        // Build the full Omit<Task, 'id' | 'createdAt' | 'riskScore'> shape that
+        // the real FirestoreService.createTask() requires. Every required field
+        // must be present; undefined values would cause a Firestore write error.
+        await firestoreService.createTask(user.uid, {
+          userId: user.uid,
+          title: t.title || 'Untitled Task',
+          description: t.description || '',
+          deadline,
           status: 'active',
-          subtasks: t.subtasks || [],
-          gmailThreadId: t.id
+          progressPercent: 0,
+          scheduledSessions: [],
+          estimatedHours: t.estimatedHours ?? 2,
+          priority: t.priority ?? 'medium',
+          subtasks: (t.subtasks || []).map((s: any) => ({
+            id: s.id || crypto.randomUUID(),
+            title: s.title,
+            done: s.done ?? false,
+          })),
+          // Store the Gmail scan mock id as the threadId so the task badge
+          // ("Imported from Gmail") renders correctly in TaskDetailSheet.
+          gmailThreadId: t.id ?? null,
+          notes: '',
         });
       }
+
       setAddedCount(tasksToCreate.length);
       if (onRefreshTasks) {
         onRefreshTasks();
@@ -106,6 +139,7 @@ export default function OnboardingWizard({ showOnboarding, onClose, onRefreshTas
       setCurrentStep(3);
     } catch (e) {
       console.error('Failed to import tasks:', e);
+      // Still advance so the user isn't stuck; they can add tasks manually.
       setCurrentStep(3);
     } finally {
       setAddingTasks(false);
@@ -120,14 +154,14 @@ export default function OnboardingWizard({ showOnboarding, onClose, onRefreshTas
   return (
     <div id="onboarding-dialog-container" className="fixed inset-0 z-50 flex items-center justify-center p-4">
       {/* Backdrop */}
-      <div 
+      <div
         onClick={onClose}
         className="absolute inset-0 bg-black/75 backdrop-blur-md transition-opacity"
       />
 
       {/* Main Dialog Box */}
-      <div 
-        id="onboarding-dialog-body" 
+      <div
+        id="onboarding-dialog-body"
         className="relative w-full max-w-md bg-[#0D0D15] border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100 flex flex-col max-h-[90vh]"
       >
         {/* Header Section */}
@@ -138,15 +172,15 @@ export default function OnboardingWizard({ showOnboarding, onClose, onRefreshTas
               <span
                 key={step}
                 className={`w-2.5 h-2.5 rounded-full transition-all duration-300 ${
-                  currentStep === step 
-                    ? 'bg-indigo-500 scale-110 shadow-sm shadow-indigo-500/50' 
+                  currentStep === step
+                    ? 'bg-indigo-500 scale-110 shadow-sm shadow-indigo-500/50'
                     : 'bg-slate-800'
                 }`}
               />
             ))}
           </div>
 
-          <button 
+          <button
             onClick={onClose}
             className="text-slate-500 hover:text-white transition p-1 rounded-lg hover:bg-white/5 cursor-pointer"
           >
@@ -157,6 +191,8 @@ export default function OnboardingWizard({ showOnboarding, onClose, onRefreshTas
         {/* Form Container */}
         <div className="p-6 overflow-y-auto flex-1">
           <AnimatePresence mode="wait">
+
+            {/* ── Step 1: Work Schedule ─────────────────────────────── */}
             {currentStep === 1 && (
               <motion.div
                 key="step-1"
@@ -247,6 +283,7 @@ export default function OnboardingWizard({ showOnboarding, onClose, onRefreshTas
               </motion.div>
             )}
 
+            {/* ── Step 2: Gmail Scan ────────────────────────────────── */}
             {currentStep === 2 && (
               <motion.div
                 key="step-2"
@@ -287,6 +324,7 @@ export default function OnboardingWizard({ showOnboarding, onClose, onRefreshTas
                     <div className="max-h-[220px] overflow-y-auto space-y-2.5 pr-1">
                       {scannedTasks.map((t) => {
                         const isSelected = selectedTaskIds.includes(t.id);
+                        const deadlineDate = t.deadline ? new Date(t.deadline) : null;
                         return (
                           <div
                             key={t.id}
@@ -294,11 +332,11 @@ export default function OnboardingWizard({ showOnboarding, onClose, onRefreshTas
                             className={`flex items-start gap-3 p-3 rounded-xl border transition text-left cursor-pointer ${
                               isSelected
                                 ? 'bg-indigo-500/10 border-indigo-500/30'
-                                : 'bg-[#13131E] border-slate-850 hover:border-slate-800'
+                                : 'bg-[#13131E] border-slate-800 hover:border-slate-700'
                             }`}
                           >
-                            <div className={`mt-0.5 w-4.5 h-4.5 rounded border flex items-center justify-center transition shrink-0 ${
-                              isSelected ? 'bg-indigo-500 border-indigo-500 text-white' : 'border-slate-750 bg-slate-900'
+                            <div className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center transition shrink-0 ${
+                              isSelected ? 'bg-indigo-500 border-indigo-500 text-white' : 'border-slate-700 bg-slate-900'
                             }`}>
                               {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
                             </div>
@@ -309,9 +347,11 @@ export default function OnboardingWizard({ showOnboarding, onClose, onRefreshTas
                                 <span className="text-[9px] font-mono text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded uppercase font-semibold">
                                   {t.priority}
                                 </span>
-                                <span className="text-[9px] font-mono text-slate-500">
-                                  Due: {new Date(t.deadline).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-                                </span>
+                                {deadlineDate && !isNaN(deadlineDate.getTime()) && (
+                                  <span className="text-[9px] font-mono text-slate-500">
+                                    Due: {deadlineDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -322,16 +362,16 @@ export default function OnboardingWizard({ showOnboarding, onClose, onRefreshTas
                     {/* Action button */}
                     <button
                       onClick={handleAddTasks}
-                      disabled={addingTasks}
+                      disabled={addingTasks || selectedTaskIds.length === 0}
                       className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 transition text-white py-3 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer"
                     >
                       {addingTasks ? (
                         <>
                           <Loader2 className="w-4 h-4 animate-spin" />
-                          <span>Creating tasks...</span>
+                          <span>Creating tasks in Firestore...</span>
                         </>
                       ) : (
-                        <span>Add {selectedTaskIds.length} Selected Tasks</span>
+                        <span>Add {selectedTaskIds.length} Selected Task{selectedTaskIds.length !== 1 ? 's' : ''}</span>
                       )}
                     </button>
                   </div>
@@ -349,6 +389,7 @@ export default function OnboardingWizard({ showOnboarding, onClose, onRefreshTas
               </motion.div>
             )}
 
+            {/* ── Step 3: Completion ────────────────────────────────── */}
             {currentStep === 3 && (
               <motion.div
                 key="step-3"
@@ -358,7 +399,7 @@ export default function OnboardingWizard({ showOnboarding, onClose, onRefreshTas
                 transition={{ duration: 0.3 }}
                 className="space-y-6 text-center py-4"
               >
-                {/* Large, animated Zap icon */}
+                {/* Large animated Zap icon */}
                 <div className="flex justify-center">
                   <motion.div
                     initial={{ scale: 0 }}
@@ -373,9 +414,9 @@ export default function OnboardingWizard({ showOnboarding, onClose, onRefreshTas
                 <div className="space-y-2">
                   <h2 className="text-xl font-bold text-white tracking-tight">You&apos;re all set!</h2>
                   <p className="text-xs text-slate-400 max-w-[300px] mx-auto leading-relaxed">
-                    {addedCount > 0 
-                      ? `CLUTCH found ${addedCount} tasks and scheduled your first work sessions.`
-                      : "CLUTCH has configured your profile. Let's start tracking and defending your deadlines."}
+                    {addedCount > 0
+                      ? `CLUTCH created ${addedCount} task${addedCount !== 1 ? 's' : ''} in Firestore and is ready to defend your deadlines.`
+                      : "CLUTCH has saved your profile. Let's start tracking and defending your deadlines."}
                   </p>
                 </div>
 
@@ -396,6 +437,7 @@ export default function OnboardingWizard({ showOnboarding, onClose, onRefreshTas
                 </button>
               </motion.div>
             )}
+
           </AnimatePresence>
         </div>
       </div>

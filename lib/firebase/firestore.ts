@@ -479,13 +479,29 @@ export class FirestoreService {
   async getSessionsForTask(taskId: string): Promise<TaskSession[]> {
     const path = 'sessions';
     try {
-      const q = query(
-        collection(db, path),
-        where('taskId', '==', taskId),
-        orderBy('scheduledStart', 'asc')
-      );
-      const querySnapshot = await getDocs(q);
-      return querySnapshot.docs.map(doc => mapSession(doc.id, doc.data()));
+      const runQuery = async () => {
+        const q = query(
+          collection(db, path),
+          where('taskId', '==', taskId),
+          orderBy('scheduledStart', 'asc')
+        );
+        const querySnapshot = await getDocs(q);
+        return querySnapshot.docs.map(doc => mapSession(doc.id, doc.data()));
+      };
+
+      try {
+        return await runQuery();
+      } catch (err: any) {
+        if (err && (err.message?.includes('index') || err.code === 'failed-precondition')) {
+          console.warn('getSessionsForTask failed (likely missing index). Falling back to in-memory filtering.');
+          const qBase = query(collection(db, path), where('taskId', '==', taskId));
+          const querySnapshot = await getDocs(qBase);
+          let sessions = querySnapshot.docs.map(doc => mapSession(doc.id, doc.data()));
+          sessions.sort((a, b) => a.scheduledStart.getTime() - b.scheduledStart.getTime());
+          return sessions;
+        }
+        throw err;
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.GET, path);
     }
