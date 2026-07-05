@@ -244,8 +244,8 @@ export default function GmailScanModal({ open, onClose, onTasksAdded }: GmailSca
                     if (d.deadline) {
                       try {
                         const dlDate = new Date(d.deadline);
-                        formattedDeadline = formatRelativeDeadline(dlDate);
-                        
+                        formattedDeadline = formatRelativeDeadline(dlDate).label;
+
                         // Set colors based on relative time
                         const diff = dlDate.getTime() - Date.now();
                         if (diff < 0) {

@@ -27,3 +27,23 @@ export function formatRelativeDeadline(deadline: Date | string | any): { label: 
   }
   return { label: `Due in ${days} days`, level: 'low' };
 }
+
+/**
+ * Resolves a user's work-hour window ("09:00" - "18:00") into concrete
+ * Date boundaries anchored to the given target date.
+ */
+export function getWorkBoundaries(
+  targetDate: Date,
+  workHours: { start: string; end: string }
+): { workStart: Date; workEnd: Date } {
+  const [startHour, startMinute] = workHours.start.split(':').map((v) => parseInt(v, 10));
+  const [endHour, endMinute] = workHours.end.split(':').map((v) => parseInt(v, 10));
+
+  const workStart = new Date(targetDate);
+  workStart.setHours(Number.isFinite(startHour) ? startHour : 9, Number.isFinite(startMinute) ? startMinute : 0, 0, 0);
+
+  const workEnd = new Date(targetDate);
+  workEnd.setHours(Number.isFinite(endHour) ? endHour : 18, Number.isFinite(endMinute) ? endMinute : 0, 0, 0);
+
+  return { workStart, workEnd };
+}
