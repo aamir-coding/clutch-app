@@ -4,12 +4,12 @@ import React, { useState } from 'react';
 import { X, Mail, ShieldAlert, CheckCircle2, Loader2, Sparkles } from 'lucide-react';
 import TaskDetailSheet from '@/components/tasks/TaskDetailSheet';
 import AddTaskForm from '@/components/tasks/AddTaskForm';
-import { Task } from '@/lib/firebase/firestoreService';
+import { Task } from '@/lib/types';
 
 interface AddTaskModalProps {
   open: boolean;
   onClose: () => void;
-  onAdd: (task: Partial<Task>) => void;
+  onAdd: (task: Partial<Task>) => void | Promise<void>;
 }
 
 export function AddTaskModal({ open, onClose, onAdd }: AddTaskModalProps) {
@@ -41,8 +41,8 @@ export function AddTaskModal({ open, onClose, onAdd }: AddTaskModalProps) {
         </div>
 
         <AddTaskForm 
-          onTaskAdded={(task) => {
-            onAdd(task);
+          onTaskAdded={async (task) => {
+            await onAdd(task);
             onClose();
           }} 
           onClose={onClose} 
@@ -55,10 +55,11 @@ export function AddTaskModal({ open, onClose, onAdd }: AddTaskModalProps) {
 interface GmailScanModalProps {
   open: boolean;
   onClose: () => void;
+  onCreateTask: (task: Partial<Task>) => Promise<Task>;
   onTasksAdded: () => void;
 }
 
-export function GmailScanModal({ open, onClose, onTasksAdded }: GmailScanModalProps) {
+export function GmailScanModal({ open, onClose, onCreateTask, onTasksAdded }: GmailScanModalProps) {
   const [scanning, setScanning] = useState(false);
   const [scanStep, setScanStep] = useState(0);
   const [foundEmails, setFoundEmails] = useState<any[]>([]);
@@ -69,7 +70,7 @@ export function GmailScanModal({ open, onClose, onTasksAdded }: GmailScanModalPr
   const handleStartScan = async () => {
     setScanning(true);
     setFoundEmails([]);
-    
+
     // Simulate multi-step scan
     setScanStep(1); // Connecting
     await new Promise(res => setTimeout(res, 800));
@@ -88,7 +89,7 @@ export function GmailScanModal({ open, onClose, onTasksAdded }: GmailScanModalPr
         extractedTask: 'Server Migration Q3 Cutover',
         extractedDeadline: new Date(Date.now() + 36 * 3600 * 1000).toISOString(), // 36h from now
         estimatedHours: 4,
-        priority: 'critical'
+        priority: 'critical' as const
       },
       {
         id: 'email-2',
@@ -98,7 +99,7 @@ export function GmailScanModal({ open, onClose, onTasksAdded }: GmailScanModalPr
         extractedTask: 'Review User Feedback Docs',
         extractedDeadline: new Date(Date.now() + 60 * 3600 * 1000).toISOString(), // 60h from now
         estimatedHours: 2,
-        priority: 'high'
+        priority: 'high' as const
       }
     ]);
     setScanning(false);
@@ -108,20 +109,17 @@ export function GmailScanModal({ open, onClose, onTasksAdded }: GmailScanModalPr
   const handleImport = async () => {
     setImporting(true);
     try {
-      // Post all found emails as tasks to our /api/tasks route
       for (const email of foundEmails) {
-        await fetch('/api/tasks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: email.extractedTask,
-            description: email.snippet,
-            deadline: email.extractedDeadline,
-            estimatedHours: email.estimatedHours,
-            priority: email.priority,
-            gmailThreadId: email.id,
-            subtasks: []
-          })
+        await onCreateTask({
+          title: email.extractedTask,
+          description: email.snippet,
+          deadline: new Date(email.extractedDeadline),
+          estimatedHours: email.estimatedHours,
+          priority: email.priority,
+          status: 'active',
+          progressPercent: 0,
+          gmailThreadId: email.id,
+          subtasks: [],
         });
       }
       onTasksAdded();
@@ -168,7 +166,7 @@ export function GmailScanModal({ open, onClose, onTasksAdded }: GmailScanModalPr
               <div className="space-y-1.5">
                 <p className="text-xs font-bold font-mono text-white">
                   {scanStep === 1 && 'CONNECTING SECURELY TO GMAIL...'}
-                  {scanStep === 2 && 'ANALYZING PRIORITY INBOX INBOX...'}
+                  {scanStep === 2 && 'ANALYZING PRIORITY INBOX...'}
                   {scanStep === 3 && 'EXTRACTING HIGH-STAKES DEADLINE TARGETS...'}
                 </p>
                 <p className="text-[10px] text-slate-500">CLUTCH is scanning sender authorities and relative risk factors.</p>

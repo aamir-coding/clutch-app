@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
-import { useAuth } from './useAuth';
+import { useAuth } from '@/components/layout/AuthProvider';
 import { TaskSession } from '@/lib/firebase/firestoreService';
 
 export interface CalendarEvent {
@@ -24,13 +24,18 @@ export function useCalendar() {
     setLoading(true);
     lastRangeRef.current = { start, end };
     try {
-      const userId = user?.uid || 'default_user';
+      const userId = user?.uid;
+      if (!userId) {
+        setEvents([]);
+        setSessions([]);
+        return;
+      }
       const startDateStr = start.toISOString();
       const endDateStr = end.toISOString();
 
       const url = `/api/calendar?userId=${userId}&startDate=${encodeURIComponent(startDateStr)}&endDate=${encodeURIComponent(endDateStr)}`;
       const res = await fetch(url);
-      
+
       if (res.ok) {
         const data = await res.json();
         setEvents(data.events || []);
@@ -47,8 +52,8 @@ export function useCalendar() {
   }, [user]);
 
   const scheduleSession = useCallback(async (
-    taskId: string, 
-    taskName: string, 
+    taskId: string,
+    taskName: string,
     durationMinutes: number,
     startTime?: string
   ): Promise<{ success: boolean; sessionTime?: string }> => {
@@ -68,20 +73,20 @@ export function useCalendar() {
 
       if (res.ok) {
         const data = await res.json();
-        
+
         // On success: re-fetch events for current week range
         if (lastRangeRef.current) {
           await fetchForDateRange(lastRangeRef.current.start, lastRangeRef.current.end);
         }
-        
-        return { 
-          success: true, 
-          sessionTime: data.sessionTime 
+
+        return {
+          success: true,
+          sessionTime: data.sessionTime
         };
       } else if (res.status === 422) {
         return { success: false };
       }
-      
+
       return { success: false };
     } catch (e) {
       console.error('Error scheduling session:', e);
@@ -89,11 +94,11 @@ export function useCalendar() {
     }
   }, [fetchForDateRange]);
 
-  return { 
-    events, 
-    sessions, 
-    loading, 
-    fetchForDateRange, 
-    scheduleSession 
+  return {
+    events,
+    sessions,
+    loading,
+    fetchForDateRange,
+    scheduleSession
   };
 }

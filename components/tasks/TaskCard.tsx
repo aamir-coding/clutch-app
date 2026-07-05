@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { Clock, ShieldAlert, CheckCircle2, Circle, AlertTriangle, ArrowUpRight } from 'lucide-react';
-import { Task } from '@/lib/firebase/firestoreService';
+import { Task, TaskPriority } from '@/lib/types';
 
 interface TaskCardProps {
   task: Task;
@@ -13,14 +13,16 @@ interface TaskCardProps {
 
 export default function TaskCard({ task, onUpdate, onOpenDetails, onDelete }: TaskCardProps) {
   const isCompleted = task.status === 'completed';
-  const deadlineDate = new Date(task.deadline);
-  
+  const deadlineDate = task.deadline;
+  const priority: TaskPriority = task.priority || 'medium';
+  const subtasks = task.subtasks || [];
+
   const handleToggleComplete = (e: React.MouseEvent) => {
     e.stopPropagation();
     onUpdate({ status: isCompleted ? 'active' : 'completed', progressPercent: isCompleted ? 0 : 100 });
   };
 
-  const getPriorityBadge = (p: 'critical' | 'high' | 'medium' | 'low') => {
+  const getPriorityBadge = (p: TaskPriority) => {
     switch (p) {
       case 'critical': return 'bg-rose-500/10 border-rose-500/20 text-rose-400';
       case 'high': return 'bg-amber-500/10 border-amber-500/20 text-amber-400';
@@ -29,8 +31,8 @@ export default function TaskCard({ task, onUpdate, onOpenDetails, onDelete }: Ta
     }
   };
 
-  const doneSubtasks = task.subtasks.filter((s) => s.done).length;
-  const totalSubtasks = task.subtasks.length;
+  const doneSubtasks = subtasks.filter((s) => s.done).length;
+  const totalSubtasks = subtasks.length;
 
   return (
     <div 
@@ -42,8 +44,8 @@ export default function TaskCard({ task, onUpdate, onOpenDetails, onDelete }: Ta
       <div className="flex justify-between items-start gap-3">
         <div className="space-y-1 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className={`text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${getPriorityBadge(task.priority)}`}>
-              {task.priority}
+            <span className={`text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${getPriorityBadge(priority)}`}>
+              {priority}
             </span>
             {totalSubtasks > 0 && (
               <span className="text-[10px] text-slate-500 font-mono">

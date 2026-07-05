@@ -5,7 +5,7 @@ import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Plus, Minus, X, Loader2, Calendar, ClipboardList } from 'lucide-react';
-import { Task } from '@/lib/firebase/firestoreService';
+import { Task } from '@/lib/types';
 
 // Form validation schema with Zod
 const addTaskSchema = z.object({
@@ -21,7 +21,7 @@ const addTaskSchema = z.object({
 type AddTaskFormData = z.infer<typeof addTaskSchema>;
 
 interface AddTaskFormProps {
-  onTaskAdded: (task: Task) => void;
+  onTaskAdded: (task: Partial<Task>) => void | Promise<void>;
   onClose: () => void;
 }
 
@@ -71,7 +71,7 @@ export default function AddTaskForm({ onTaskAdded, onClose }: AddTaskFormProps) 
   const onSubmit = async (data: AddTaskFormData) => {
     // Combine date string and time string to single Date object
     const deadlineDate = new Date(`${data.dateStr}T${data.timeStr}`);
-    
+
     if (deadlineDate <= new Date()) {
       alert('Deadline must be in the future.');
       return;
@@ -87,27 +87,18 @@ export default function AddTaskForm({ onTaskAdded, onClose }: AddTaskFormProps) 
           done: false,
         }));
 
-      // Simulate API or firestoreService post
-      const response = await fetch('/api/tasks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: data.title,
-          description: data.description || '',
-          deadline: deadlineDate.toISOString(),
-          estimatedHours: data.estimatedHours,
-          priority: data.priority,
-          subtasks: formattedSubtasks,
-        }),
-      });
+      const newTask: Partial<Task> = {
+        title: data.title,
+        description: data.description || '',
+        deadline: deadlineDate,
+        estimatedHours: data.estimatedHours,
+        priority: data.priority,
+        status: 'active',
+        progressPercent: 0,
+        subtasks: formattedSubtasks,
+      };
 
-      if (!response.ok) {
-        throw new Error('Failed to create task');
-      }
-
-      const result = await response.json();
-      onTaskAdded(result);
-      onClose();
+      await onTaskAdded(newTask);
     } catch (e: any) {
       console.error(e);
       alert(e.message || 'Failed to add task. Please try again.');
@@ -217,7 +208,7 @@ export default function AddTaskForm({ onTaskAdded, onClose }: AddTaskFormProps) 
           >
             <Minus className="w-4 h-4" />
           </button>
-          
+
           <span className="text-sm font-extrabold text-white w-10 text-center font-mono">
             {estimatedHours}h
           </span>

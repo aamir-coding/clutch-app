@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { AlertTriangle, Clock, ShieldAlert } from 'lucide-react';
-import { Task } from '@/lib/firebase/firestoreService';
+import { Task } from '@/lib/types';
 
 interface AtRiskPanelProps {
   tasks: Task[];
@@ -14,8 +14,7 @@ export default function AtRiskPanel({ tasks, onTaskClick, onUpdateTask }: AtRisk
   // Filters active tasks that have high risks (deadline is soon, priority is critical, progress is low)
   const atRiskList = tasks.filter((t) => {
     if (t.status === 'completed') return false;
-    const dl = new Date(t.deadline).getTime();
-    const hoursLeft = (dl - Date.now()) / (3600 * 1000);
+    const hoursLeft = (t.deadline.getTime() - Date.now()) / (3600 * 1000);
     return hoursLeft < 48 || (hoursLeft < 72 && t.priority === 'critical');
   });
 
@@ -36,9 +35,8 @@ export default function AtRiskPanel({ tasks, onTaskClick, onUpdateTask }: AtRisk
       ) : (
         <div className="space-y-3">
           {atRiskList.map((task) => {
-            const dl = new Date(task.deadline);
-            const hoursLeft = Math.max(0, (dl.getTime() - Date.now()) / (3600 * 1000));
-            
+            const hoursLeft = Math.max(0, (task.deadline.getTime() - Date.now()) / (3600 * 1000));
+
             return (
               <div 
                 key={task.id}
@@ -53,7 +51,7 @@ export default function AtRiskPanel({ tasks, onTaskClick, onUpdateTask }: AtRisk
                     {task.title}
                   </h4>
                   <div className="flex items-center justify-between gap-2 text-[10px] font-mono">
-                    <span className="text-rose-400 font-bold uppercase">{task.priority}</span>
+                    <span className="text-rose-400 font-bold uppercase">{task.priority || 'medium'}</span>
                     <span className="text-slate-500">
                       {Math.round(hoursLeft)}h remaining
                     </span>
