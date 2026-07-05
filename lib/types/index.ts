@@ -69,10 +69,22 @@ export interface AgentMessage {
   timestamp: Date;
 }
 
+/**
+ * Every variant the Gemini agent stream can emit.
+ *
+ * `crisis_activated` is yielded by `clutchAgent.runStream` when the
+ * `activate_crisis_mode` tool completes successfully. The API route forwards
+ * it to the browser as a JSON-line event; `useAgent` receives it and calls
+ * `useUiStore.getState().activateCrisisMode(taskId)` to trigger the overlay.
+ *
+ * This keeps the Zustand UI store entirely client-side: the server never
+ * touches it, and the browser reacts to the stream event.
+ */
 export type AgentStreamEvent =
   | { type: 'text'; content: string }
   | { type: 'tool_call'; name: string }
   | { type: 'tool_result'; name: string; summary: string }
+  | { type: 'crisis_activated'; taskId: string }
   | { type: 'error'; message: string };
 
 export interface WorkPlan {
@@ -139,7 +151,7 @@ export interface GmailDeadline {
   emailSnippet: string;
 }
 
-export type RiskLevel = 'none' | 'low' | 'medium' | 'high' | 'critical';
+export type RiskLevel    = 'none' | 'low' | 'medium' | 'high' | 'critical';
 export type TaskPriority = 'critical' | 'high' | 'medium' | 'low';
 
 export interface ToolResult {
