@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { X, Calendar, Plus, CheckCircle2, Circle, Clock, Mail, Trash2, Loader2 } from 'lucide-react';
 import { firestoreService } from '@/lib/firebase/firestore';
 import { Task, TaskSession } from '@/lib/types';
+import { formatDate, formatTime, formatTimeRange } from '@/lib/utils/formatDate';
 
 interface TaskDetailSheetProps {
   task: Task | null;
@@ -21,11 +22,11 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
   const [newSubtaskText, setNewSubtaskText] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [schedulingSession, setSchedulingSession] = useState(false);
-  
+
   const titleInputRef = useRef<HTMLInputElement>(null);
   const confirmTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Sync title input
+  // Sync title when task changes
   useEffect(() => {
     if (task) {
       setEditedTitle(task.title);
@@ -33,36 +34,49 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
     setConfirmDelete(false);
   }, [task]);
 
-  // Fetch task sessions
+  // Fetch sessions when sheet opens
   useEffect(() => {
-    if (task && open) {
-      const loadSessions = async () => {
-        try {
-          setLoadingSessions(true);
-          const data = await firestoreService.getSessionsForTask(task.id);
-          setSessions(data);
-        } catch (e) {
-          console.error('Failed to load sessions:', e);
-        } finally {
-          setLoadingSessions(false);
-        }
-      };
-      loadSessions();
-    }
-  }, [task, open]);
+    if (!task || !open) return;
 
-  // Focus title input when editing
+    let active = true;
+    const loadSessions = async () => {
+      try {
+        setLoadingSessions(true);
+        const data = await firestoreService.getSessionsForTask(task.id);
+        if (active) setSessions(data);
+      } catch (e) {
+        console.error('Failed to load sessions:', e);
+      } finally {
+        if (active) setLoadingSessions(false);
+      }
+    };
+
+    loadSessions();
+
+    // Cleanup: prevent setState on unmounted/closed sheet
+    return () => {
+      active = false;
+    };
+  }, [task?.id, open]);
+
+  // Focus title input when editing starts
   useEffect(() => {
     if (isEditingTitle && titleInputRef.current) {
       titleInputRef.current.focus();
     }
   }, [isEditingTitle]);
 
+  // Cleanup confirm-delete timer on unmount
+  useEffect(() => {
+    return () => {
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+    };
+  }, []);
+
   if (!task || !open) return null;
 
   const subtasks = task.subtasks || [];
 
-  // Title edit handler
   const handleTitleBlur = () => {
     setIsEditingTitle(false);
     if (editedTitle.trim() && editedTitle !== task.title) {
@@ -71,12 +85,13 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
   };
 
   const handleTitleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleTitleBlur();
+    if (e.key === 'Enter') handleTitleBlur();
+    if (e.key === 'Escape') {
+      setIsEditingTitle(false);
+      setEditedTitle(task.title);
     }
   };
 
-  // Subtask handlers
   const handleToggleSubtask = (subId: string) => {
     const updatedSubtasks = subtasks.map((st) =>
       st.id === subId ? { ...st, done: !st.done } : st
@@ -96,7 +111,6 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
     setNewSubtaskText('');
   };
 
-  // Delete handler with timeout
   const handleDeleteClick = () => {
     if (confirmDelete) {
       onDelete();
@@ -104,15 +118,10 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
     } else {
       setConfirmDelete(true);
       if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
-      confirmTimerRef.current = setTimeout(() => {
-        setConfirmDelete(false);
-      }, 3000);
+      confirmTimerRef.current = setTimeout(() => setConfirmDelete(false), 3000);
     }
   };
 
-  // Simulate Calendar Session Scheduling (UI-only — does not persist to
-  // Firestore or Google Calendar; use the Battle Plan / Timeline flows for
-  // real session booking)
   const handleScheduleNewSession = async () => {
     setSchedulingSession(true);
     try {
@@ -134,17 +143,17 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
     }
   };
 
-  // Deadline calculation details
-  const deadlineDate = task.deadline;
-  const hoursLeft = Math.max(0, (deadlineDate.getTime() - Date.now()) / (3600 * 1000));
-  const estimatedHours = task.estimatedHours ?? 2;
-  const workHoursRemaining = Math.max(0.5, estimatedHours * (1 - task.progressPercent / 100));
+  // ── Risk calculation ──────────────────────────────────────────────────────
 
-  // Risk levels
-  const riskScore = hoursLeft > 0 ? Math.min(100, Math.round((workHoursRemaining / hoursLeft) * 100)) : 100;
-  let riskLabel = 'HEALTHY';
-  let riskColor = 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5';
-  let riskBarBg = 'bg-emerald-500';
+  const deadlineDate     = task.deadline;
+  const hoursLeft        = Math.max(0, (deadlineDate.getTime() - Date.now()) / (3600 * 1000));
+  const estimatedHours   = task.estimatedHours ?? 2;
+  const workHoursRemaining = Math.max(0.5, estimatedHours * (1 - task.progressPercent / 100));
+  const riskScore        = hoursLeft > 0 ? Math.min(100, Math.round((workHoursRemaining / hoursLeft) * 100)) : 100;
+
+  let riskLabel  = 'HEALTHY';
+  let riskColor  = 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5';
+  let riskBarBg  = 'bg-emerald-500';
 
   if (riskScore > 75 || hoursLeft === 0) {
     riskLabel = 'CRITICAL OVERLOAD';
@@ -157,27 +166,25 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
   }
 
   const subtasksCompleted = subtasks.filter((s) => s.done).length;
-  const subtasksTotal = subtasks.length;
+  const subtasksTotal     = subtasks.length;
 
   return (
     <>
       {/* Backdrop */}
-      <div 
+      <div
         onClick={onClose}
         className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 transition-opacity animate-fade-in"
       />
 
       {/* Side Sheet */}
       <div className="fixed top-0 right-0 h-full w-full sm:max-w-lg bg-[#12121A] border-l border-[#1E1E2E] z-50 shadow-2xl flex flex-col animate-slide-in">
-        
-        {/* Top Sticky Header */}
+
+        {/* Sticky Header */}
         <div className="p-4 md:p-6 border-b border-[#1E1E2E] flex items-center justify-between bg-[#12121A] shrink-0">
-          <div className="flex items-center gap-2">
-            <span className={`text-[10px] font-mono uppercase font-bold px-2 py-0.5 rounded border ${riskColor}`}>
-              {riskLabel}
-            </span>
-          </div>
-          <button 
+          <span className={`text-[10px] font-mono uppercase font-bold px-2 py-0.5 rounded border ${riskColor}`}>
+            {riskLabel}
+          </span>
+          <button
             onClick={onClose}
             className="text-slate-500 hover:text-white transition p-1.5 rounded-lg hover:bg-white/5 cursor-pointer"
           >
@@ -187,8 +194,8 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
 
         {/* Scrollable Content */}
         <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 pb-8">
-          
-          {/* 1. Title & Status */}
+
+          {/* 1. Title */}
           <div className="space-y-3">
             {isEditingTitle ? (
               <input
@@ -201,7 +208,7 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
                 className="w-full text-xl font-bold bg-[#0A0A0F] border border-indigo-500/40 rounded-lg px-3 py-1.5 text-white outline-none"
               />
             ) : (
-              <h2 
+              <h2
                 onClick={() => setIsEditingTitle(true)}
                 className="text-xl font-bold text-white hover:text-indigo-300 transition cursor-pointer select-none leading-tight"
                 title="Click to rename"
@@ -210,7 +217,7 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
               </h2>
             )}
 
-            {/* Segmented Priority Selector */}
+            {/* Priority Selector */}
             <div className="space-y-1.5">
               <span className="text-[10px] font-mono uppercase font-bold text-slate-500">Priority Level</span>
               <div className="grid grid-cols-4 gap-1.5 bg-[#0A0A0F] p-1 border border-slate-800 rounded-lg">
@@ -221,8 +228,8 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
                       key={p}
                       onClick={() => onUpdate({ priority: p })}
                       className={`text-[10px] py-1 px-1 rounded-md font-bold uppercase transition-all tracking-wider
-                        ${isSelected 
-                          ? p === 'critical' ? 'bg-rose-500 text-white' 
+                        ${isSelected
+                          ? p === 'critical' ? 'bg-rose-500 text-white'
                             : p === 'high' ? 'bg-amber-500 text-black'
                             : p === 'medium' ? 'bg-indigo-600 text-white'
                             : 'bg-slate-700 text-white'
@@ -238,39 +245,42 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
             </div>
           </div>
 
-          {/* 2. Deadline & Risk Alert Indicator */}
-          <div className="bg-[#0A0A0F] border border-slate-800 rounded-xl p-4.5 space-y-4 shadow-inner">
+          {/* 2. Deadline & Risk */}
+          <div className="bg-[#0A0A0F] border border-slate-800 rounded-xl p-4 space-y-4 shadow-inner">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1.5">
                 <Calendar className="w-4 h-4 text-indigo-400" />
                 <span className="text-xs font-bold text-slate-300">Target Deadline</span>
               </div>
+              {/*
+               * formatDate/formatTime from lib/utils/formatDate.ts —
+               * avoids locale-sensitive hydration mismatches between
+               * server (Node.js) and browser.
+               */}
               <span className="text-xs font-mono font-bold text-indigo-400">
-                {deadlineDate.toLocaleDateString()} at {deadlineDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                {formatDate(deadlineDate)} at {formatTime(deadlineDate)}
               </span>
             </div>
 
-            {/* Risk Indicator Section */}
             <div className="space-y-2 border-t border-slate-800/60 pt-3">
               <div className="flex justify-between items-center text-xs font-mono">
                 <span className="text-slate-500 uppercase">Clutch Risk Metric</span>
                 <span className={`font-bold ${riskColor.split(' ')[0]}`}>{riskScore}%</span>
               </div>
-              
               <div className="h-2 w-full bg-slate-900 rounded-full overflow-hidden">
-                <div 
-                  className={`h-full ${riskBarBg} transition-all duration-500`} 
-                  style={{ width: `${riskScore}%` }} 
+                <div
+                  className={`h-full ${riskBarBg} transition-all duration-500`}
+                  style={{ width: `${riskScore}%` }}
                 />
               </div>
-
               <p className="text-[11px] text-slate-400 leading-relaxed pt-1 font-mono">
-                Deadline risk: {workHoursRemaining.toFixed(1)}h left to complete vs {Math.round(hoursLeft)}h remaining until targeted deadline.
+                Deadline risk: {workHoursRemaining.toFixed(1)}h left to complete vs{' '}
+                {Math.round(hoursLeft)}h remaining until targeted deadline.
               </p>
             </div>
           </div>
 
-          {/* 3. Progress Percent bar */}
+          {/* 3. Progress */}
           <div className="space-y-2">
             <div className="flex justify-between items-center text-xs font-mono uppercase">
               <span className="text-slate-500 font-bold">Progress Rate</span>
@@ -289,7 +299,7 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
             </p>
           </div>
 
-          {/* 4. Subtasks Checklist List */}
+          {/* 4. Subtasks */}
           <div className="space-y-3">
             <div className="flex justify-between items-center border-b border-slate-800 pb-1.5">
               <h3 className="text-xs uppercase tracking-wider font-bold text-white">Subtasks</h3>
@@ -300,8 +310,8 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
 
             <div className="space-y-1.5">
               {subtasks.map((st) => (
-                <div 
-                  key={st.id} 
+                <div
+                  key={st.id}
                   onClick={() => handleToggleSubtask(st.id)}
                   className="flex items-center gap-2.5 p-2 bg-[#0A0A0F]/40 border border-[#1E1E2E]/60 rounded-lg hover:border-slate-800 transition cursor-pointer select-none"
                 >
@@ -334,7 +344,7 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
             </form>
           </div>
 
-          {/* 5. Scheduled Sessions List */}
+          {/* 5. Sessions */}
           <div className="space-y-3">
             <h3 className="text-xs uppercase tracking-wider font-bold text-white border-b border-slate-800 pb-1.5">
               Google Calendar Focus Sessions
@@ -350,28 +360,28 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
               </div>
             ) : (
               <div className="space-y-2">
-                {sessions.map((sess) => {
-                  const durationHours = (sess.scheduledEnd.getTime() - sess.scheduledStart.getTime()) / (3600 * 1000);
-                  return (
-                    <div key={sess.id} className="bg-[#0A0A0F]/60 border border-slate-850 p-3 rounded-lg flex items-center justify-between gap-3 text-xs">
-                      <div className="space-y-0.5">
-                        <div className="flex items-center gap-1.5">
-                          <Clock className="w-3.5 h-3.5 text-indigo-400" />
-                          <span className="font-bold text-slate-300">
-                            {sess.completed ? 'Completed Slot' : sess.skipped ? 'Skipped Slot' : 'Focus Slot'}
-                          </span>
-                        </div>
-                        <p className="text-[10px] text-slate-500 font-mono">
-                          {sess.scheduledStart.toLocaleDateString()} • {sess.scheduledStart.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-                        </p>
+                {sessions.map((sess) => (
+                  <div
+                    key={sess.id}
+                    className="bg-[#0A0A0F]/60 border border-slate-850 p-3 rounded-lg flex items-center justify-between gap-3 text-xs"
+                  >
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                        <span className="font-bold text-slate-300">
+                          {sess.completed ? 'Completed Slot' : sess.skipped ? 'Skipped Slot' : 'Focus Slot'}
+                        </span>
                       </div>
-
-                      <span className="text-[10px] font-bold text-slate-400 bg-slate-800 rounded px-2 py-0.5">
-                        {durationHours.toFixed(1)}h Block
-                      </span>
+                      {/* formatDate/formatTime — no hydration mismatch */}
+                      <p className="text-[10px] text-slate-500 font-mono">
+                        {formatDate(sess.scheduledStart)} • {formatTimeRange(sess.scheduledStart, sess.scheduledEnd)}
+                      </p>
                     </div>
-                  );
-                })}
+                    <span className="text-[10px] font-bold text-slate-400 bg-slate-800 rounded px-2 py-0.5">
+                      {((sess.scheduledEnd.getTime() - sess.scheduledStart.getTime()) / 3600000).toFixed(1)}h Block
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
 
@@ -394,7 +404,7 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
             </button>
           </div>
 
-          {/* 6. Gmail Source Badge */}
+          {/* 6. Gmail Badge */}
           {task.gmailThreadId && (
             <div className="bg-indigo-950/20 border border-indigo-500/10 rounded-lg p-3 flex items-center gap-2 text-xs">
               <Mail className="w-4 h-4 text-indigo-400 shrink-0" />
@@ -402,7 +412,7 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
             </div>
           )}
 
-          {/* 7. Notes Area */}
+          {/* 7. Notes */}
           <div className="space-y-1.5">
             <span className="text-[10px] font-mono uppercase font-bold text-slate-500">Task Notes</span>
             <textarea
@@ -413,13 +423,13 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
             />
           </div>
 
-          {/* 8. Danger Zone - Deletion */}
+          {/* 8. Delete */}
           <div className="border-t border-slate-800 pt-5">
             <button
               onClick={handleDeleteClick}
               className={`w-full py-2.5 text-xs font-bold uppercase tracking-wider rounded-lg border transition-all flex items-center justify-center gap-2 cursor-pointer
-                ${confirmDelete 
-                  ? 'bg-rose-600 text-white border-transparent' 
+                ${confirmDelete
+                  ? 'bg-rose-600 text-white border-transparent'
                   : 'bg-transparent text-rose-400 border-rose-500/20 hover:border-rose-500/40 hover:bg-rose-500/5'
                 }
               `}
@@ -430,7 +440,6 @@ export default function TaskDetailSheet({ task, open, onClose, onUpdate, onDelet
           </div>
 
         </div>
-
       </div>
     </>
   );

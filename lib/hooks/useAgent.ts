@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useUiStore } from '@/lib/stores/uiStore';
 import { useAuth }   from '@/components/layout/AuthProvider';
 
@@ -18,14 +18,23 @@ export function useAgent() {
   const [error,          setError]          = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
 
-  // Pull individual actions from the store so they are stable references and
-  // do NOT cause the hook to re-render when unrelated store slices change.
   const setAgentThinking = useUiStore(state => state.setAgentThinking);
   const addToolCall      = useUiStore(state => state.addToolCall);
   const resolveToolCall  = useUiStore(state => state.resolveToolCall);
   const clearToolCalls   = useUiStore(state => state.clearToolCalls);
 
-  const sendMessage = async (userMessage: string) => {
+  /**
+   * sendMessage is wrapped in useCallback so that AgentChat's own
+   * useCallback(handleSubmit, [sendMessage]) chain stabilises correctly.
+   * Without this, every render of useAgent produces a new sendMessage
+   * reference, which cascades into handleSubmit → handleKeyDown being
+   * recreated on every keystroke in the textarea.
+   *
+   * conversationId is included in the dependency array because the function
+   * closes over it — omitting it would be a stale-closure bug where the
+   * second message in a conversation would always send `conversationId: null`.
+   */
+  const sendMessage = useCallback(async (userMessage: string) => {
     const newUserMsg: AgentMessage = {
       id:        crypto.randomUUID(),
       role:      'user',
@@ -72,12 +81,8 @@ export function useAgent() {
         const { done, value } = await reader.read();
         if (done) break;
 
-        // Accumulate chunks in a buffer and split on newlines so we never
-        // try to parse a partial JSON object that was split across two reads.
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
-
-        // Keep the last (potentially incomplete) line in the buffer.
         buffer = lines.pop() ?? '';
 
         for (const line of lines) {
@@ -88,7 +93,6 @@ export function useAgent() {
             const event = JSON.parse(trimmed);
 
             switch (event.type as string) {
-
               case 'tool_call':
                 addToolCall(event.name);
                 break;
@@ -106,15 +110,6 @@ export function useAgent() {
                 );
                 break;
 
-              /**
-               * Crisis mode: the server-side agent emitted this event after
-               * the activate_crisis_mode tool completed. We update the Zustand
-               * UI store here, on the client, where it is actually subscribed to.
-               *
-               * We use getState() rather than a hook selector because this code
-               * runs inside an async callback, outside the React render cycle.
-               * Zustand's getState() is safe to call anywhere.
-               */
               case 'crisis_activated':
                 if (event.taskId) {
                   useUiStore.getState().activateCrisisMode(event.taskId as string);
@@ -131,7 +126,7 @@ export function useAgent() {
         }
       }
 
-      // Flush any remaining buffer content after the stream closes.
+      // Flush any remaining buffer content after stream closes
       if (buffer.trim()) {
         try {
           const event = JSON.parse(buffer.trim());
@@ -144,7 +139,7 @@ export function useAgent() {
             );
           }
         } catch {
-          // Incomplete trailing chunk — safe to ignore.
+          // Incomplete trailing chunk — safe to ignore
         }
       }
 
@@ -154,12 +149,12 @@ export function useAgent() {
       setLoading(false);
       setAgentThinking(false);
     }
-  };
+  }, [user?.uid, conversationId, setAgentThinking, addToolCall, resolveToolCall, clearToolCalls]);
 
-  const clearHistory = () => {
+  const clearHistory = useCallback(() => {
     setMessages([]);
     setConversationId(null);
-  };
+  }, []);
 
   return { messages, loading, error, conversationId, sendMessage, clearHistory };
 }

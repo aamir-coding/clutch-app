@@ -1,50 +1,74 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Global Safety Net (Pillar 1)
+
+    // Global deny-all safety net — any path not explicitly matched below is
+    // blocked. Note: Firestore grants access if ANY matching allow rule is
+    // true, so this never overrides the specific rules beneath it.
     match /{document=**} {
       allow read, write: if false;
     }
-    
-    // Helper functions
+
+    // ── Helper functions ────────────────────────────────────────────────────
+
     function isSignedIn() {
       return request.auth != null;
     }
-    
+
     function isOwner(uid) {
       return isSignedIn() && request.auth.uid == uid;
     }
 
-    // /users/{uid}
+    // ── /users/{uid} ────────────────────────────────────────────────────────
     match /users/{uid} {
       allow read, write: if isOwner(uid);
     }
-    
-    // /tasks/{taskId}
+
+    // ── /tasks/{taskId} ─────────────────────────────────────────────────────
     match /tasks/{taskId} {
-      allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+
+      // /tasks/{taskId}/logs/{logId}
+      // Written by CrisisMode.tsx when the user submits a check-in note.
+      // We gate on the parent task's userId to prevent cross-user writes.
+      match /logs/{logId} {
+        allow create: if isSignedIn()
+          && get(/databases/$(database)/documents/tasks/$(taskId)).data.userId
+             == request.auth.uid;
+        allow read: if isSignedIn()
+          && get(/databases/$(database)/documents/tasks/$(taskId)).data.userId
+             == request.auth.uid;
+        // Logs are append-only — no update or delete.
+      }
     }
-    
-    // /sessions/{sessionId}
+
+    // ── /sessions/{sessionId} ───────────────────────────────────────────────
     match /sessions/{sessionId} {
-      allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
     }
-    
-    // /conversations/{convId}
+
+    // ── /conversations/{convId} ─────────────────────────────────────────────
+    // Written by the Admin SDK in /api/agent/route.ts (bypasses rules),
+    // but guarded here for any future client-side reads.
     match /conversations/{convId} {
-      allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
     }
-    
-    // /monitoring/{uid}
+
+    // ── /monitoring/{uid} ───────────────────────────────────────────────────
     match /monitoring/{uid} {
       allow read, write: if isOwner(uid);
     }
-    
-    // /impact/{uid}
+
+    // ── /impact/{uid} ───────────────────────────────────────────────────────
     match /impact/{uid} {
       allow read, write: if isOwner(uid);
     }

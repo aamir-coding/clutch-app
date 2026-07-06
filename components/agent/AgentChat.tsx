@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { SendHorizonal, Zap } from 'lucide-react';
 import { useAgent } from '@/lib/hooks/useAgent';
 import { useUiStore } from '@/lib/stores/uiStore';
@@ -11,8 +11,7 @@ export default function AgentChat() {
   const { messages, loading, sendMessage } = useAgent();
   const [inputValue, setInputValue] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  
-  // Safe extraction of tool calls
+
   const activeToolCallsState = useUiStore((state: any) => state.activeToolCalls);
   const activeToolCalls = activeToolCallsState || [];
 
@@ -26,50 +25,86 @@ export default function AgentChat() {
     scrollToBottom();
   }, [messages, activeToolCalls]);
 
-  const handleSubmit = () => {
+  // ── Handlers ────────────────────────────────────────────────────────────────
+
+  const handleSubmit = useCallback(() => {
     if (inputValue.trim().length === 0 || loading) return;
     const text = inputValue;
     setInputValue('');
     sendMessage(text);
-  };
+  }, [inputValue, loading, sendMessage]);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit();
-    }
-  };
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleSubmit();
+      }
+    },
+    [handleSubmit]
+  );
 
-  const suggestions = [
-    "📅 Build my battle plan for this week",
-    "📧 Scan my Gmail for missed deadlines",
-    "⚡ What's most at risk right now?",
-    "➕ Add a new task"
-  ];
+  /**
+   * Memoized so VoiceInput's internal useEffect — which lists onTranscript as
+   * a dependency — does not tear down and recreate the SpeechRecognition
+   * instance on every AgentChat render. Without useCallback, the inline arrow
+   * function is a new reference every render, causing the recognition session
+   * to reset mid-dictation.
+   */
+  const handleTranscript = useCallback((text: string) => {
+    setInputValue((prev) => (prev ? prev + ' ' + text : text));
+  }, []);
 
-  const handleSuggestionClick = (text: string) => {
-    setInputValue(text);
-    setTimeout(() => {
-      // Small delay to let the state update before sending
+  const handleSuggestionClick = useCallback(
+    (text: string) => {
       if (!loading) {
         sendMessage(text);
-        setInputValue('');
       }
-    }, 50);
-  };
+    },
+    [loading, sendMessage]
+  );
 
-  // Clone messages to inject active tool calls into the last assistant message if it's currently running
-  const displayMessages = [...messages];
-  if (loading && displayMessages.length > 0 && activeToolCalls.length > 0) {
-    const lastMsg = displayMessages[displayMessages.length - 1];
-    if (lastMsg.role === 'assistant') {
-      lastMsg.toolCalls = [...activeToolCalls];
+  // ── Display messages ─────────────────────────────────────────────────────────
+  //
+  // Build the render-time message list without mutating the store's objects.
+  //
+  // The original code did:
+  //   const displayMessages = [...messages];
+  //   lastMsg.toolCalls = [...activeToolCalls]; // ← direct mutation of state obj
+  //
+  // [...messages] is a *shallow* copy — the objects inside are the same
+  // references as in the state array. Assigning to lastMsg.toolCalls mutates
+  // the live state object. React may miss the re-render because the reference
+  // identity hasn't changed.
+  //
+  // Fix: map over messages and return a new object only for the one message
+  // that needs the injected toolCalls.
+  const displayMessages = messages.map((msg, idx) => {
+    if (
+      loading &&
+      idx === messages.length - 1 &&
+      msg.role === 'assistant' &&
+      activeToolCalls.length > 0
+    ) {
+      return { ...msg, toolCalls: [...activeToolCalls] };
     }
-  }
+    return msg;
+  });
+
+  // ── Suggestions ──────────────────────────────────────────────────────────────
+
+  const suggestions = [
+    '📅 Build my battle plan for this week',
+    '📧 Scan my Gmail for missed deadlines',
+    '⚡ What\'s most at risk right now?',
+    '➕ Add a new task',
+  ];
+
+  // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-col h-full bg-[#06060A]">
-      
+
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
         {messages.length === 0 ? (
@@ -82,7 +117,8 @@ export default function AgentChat() {
                 CLUTCH
               </h1>
               <p className="text-slate-400 text-sm max-w-md mx-auto">
-                How can I help you today? I can manage your tasks, schedule work sessions, and keep your deadlines on track.
+                How can I help you today? I can manage your tasks, schedule work
+                sessions, and keep your deadlines on track.
               </p>
             </div>
 
@@ -100,10 +136,10 @@ export default function AgentChat() {
           </div>
         ) : (
           displayMessages.map((msg, idx) => (
-            <AgentMessage 
-              key={msg.id} 
-              message={msg} 
-              isLast={idx === displayMessages.length - 1} 
+            <AgentMessage
+              key={msg.id}
+              message={msg}
+              isLast={idx === displayMessages.length - 1}
             />
           ))
         )}
@@ -122,14 +158,12 @@ export default function AgentChat() {
               className="flex-1 bg-[#0A0A0F] border border-[#1E1E2E] focus:border-indigo-500/50 outline-none text-white placeholder-slate-600 rounded-xl px-4 py-3 text-sm min-h-[48px] max-h-[140px] resize-none transition-colors"
               rows={1}
             />
-            
-            <VoiceInput 
-              onTranscript={(text) => { 
-                setInputValue(prev => prev ? prev + ' ' + text : text); 
-              }} 
+
+            <VoiceInput
+              onTranscript={handleTranscript}
               disabled={loading}
             />
-            
+
             <button
               onClick={handleSubmit}
               disabled={loading || inputValue.trim().length === 0}
@@ -143,7 +177,7 @@ export default function AgentChat() {
           </p>
         </div>
       </div>
-      
+
     </div>
   );
 }
