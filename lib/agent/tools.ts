@@ -1,150 +1,268 @@
-import { Tool, SchemaType } from '@google/generative-ai';
+import { Tool } from '@google/generative-ai';
 
+/**
+ * Tool definitions for the Gemini function-calling API.
+ *
+ * Schema types must be plain string literals ('object', 'string', etc.)
+ * rather than the SchemaType enum — using the enum causes a runtime
+ * serialisation mismatch that makes Gemini ignore the tool definitions
+ * silently, producing a plain-text response instead of tool calls.
+ */
 export const CLUTCH_TOOLS: Tool[] = [
   {
     functionDeclarations: [
+
+      // ── Calendar ────────────────────────────────────────────────────────
+
       {
-        name: 'scan_calendar',
-        description: 'Read Google Calendar events for a date range. Call this before scheduling anything to understand the user\'s existing commitments.',
+        name:        'scan_calendar',
+        description: 'Retrieve Google Calendar events for a date range. Use this to understand the user\'s existing schedule before suggesting new sessions.',
         parameters: {
-          type: SchemaType.OBJECT,
+          type: 'object' as any,
           properties: {
-            start_date: { type: SchemaType.STRING, description: 'ISO 8601 date YYYY-MM-DD' },
-            end_date: { type: SchemaType.STRING, description: 'ISO 8601 date YYYY-MM-DD' }
+            start_date: {
+              type:        'string' as any,
+              description: 'ISO 8601 start datetime, e.g. 2025-01-20T00:00:00Z',
+            },
+            end_date: {
+              type:        'string' as any,
+              description: 'ISO 8601 end datetime, e.g. 2025-01-27T23:59:59Z',
+            },
           },
-          required: ['start_date', 'end_date']
-        }
+          required: ['start_date', 'end_date'],
+        },
       },
+
       {
-        name: 'find_free_slots',
-        description: 'Find available time blocks within the user\'s work hours on a given day. Returns slots long enough for a work session.',
+        name:        'find_free_slots',
+        description: 'Find available free time slots in the user\'s calendar on a specific day that are long enough for a focus session.',
         parameters: {
-          type: SchemaType.OBJECT,
+          type: 'object' as any,
           properties: {
-            target_date: { type: SchemaType.STRING, description: 'ISO 8601 date YYYY-MM-DD' },
-            duration_minutes: { type: SchemaType.NUMBER, description: 'Minimum slot length needed in minutes' },
-            prefer_morning: { type: SchemaType.BOOLEAN, description: 'If true, return morning slots first' }
+            target_date: {
+              type:        'string' as any,
+              description: 'ISO 8601 date to find slots on, e.g. 2025-01-21T00:00:00Z',
+            },
+            duration_minutes: {
+              type:        'number' as any,
+              description: 'Minimum slot length in minutes, e.g. 60, 90, 120',
+            },
+            prefer_morning: {
+              type:        'boolean' as any,
+              description: 'If true, surface morning slots first',
+            },
           },
-          required: ['target_date', 'duration_minutes']
-        }
+          required: ['target_date', 'duration_minutes'],
+        },
       },
+
       {
-        name: 'schedule_work_session',
-        description: 'Create a Google Calendar event to block time for a specific task. This writes a real event to the user\'s calendar.',
+        name:        'schedule_work_session',
+        description: 'Create a Google Calendar event to block focus time for a specific task. Always call find_free_slots first to confirm the slot is available.',
         parameters: {
-          type: SchemaType.OBJECT,
+          type: 'object' as any,
           properties: {
-            task_name: { type: SchemaType.STRING },
-            task_id: { type: SchemaType.STRING },
-            start_datetime: { type: SchemaType.STRING, description: 'ISO 8601 datetime with timezone offset' },
-            duration_minutes: { type: SchemaType.NUMBER },
-            session_description: { type: SchemaType.STRING, description: 'What the user should focus on in this session' }
+            task_id: {
+              type:        'string' as any,
+              description: 'Firestore ID of the task this session is for',
+            },
+            task_name: {
+              type:        'string' as any,
+              description: 'Human-readable task name (used as calendar event title)',
+            },
+            start_datetime: {
+              type:        'string' as any,
+              description: 'ISO 8601 start datetime for the session',
+            },
+            duration_minutes: {
+              type:        'number' as any,
+              description: 'Session length in minutes',
+            },
+            session_description: {
+              type:        'string' as any,
+              description: 'Optional notes or sub-goals for the session',
+            },
           },
-          required: ['task_name', 'start_datetime', 'duration_minutes']
-        }
+          required: ['task_name', 'start_datetime', 'duration_minutes'],
+        },
       },
+
+      // ── Tasks ────────────────────────────────────────────────────────────
+
       {
-        name: 'get_all_tasks',
-        description: 'Retrieve all tasks from the user\'s CLUTCH task list with their deadlines, progress, and risk scores.',
+        name:        'get_all_tasks',
+        description: 'Retrieve the user\'s tasks from Firestore. Always call this before giving advice about scheduling or deadlines.',
         parameters: {
-          type: SchemaType.OBJECT,
+          type: 'object' as any,
           properties: {
-            filter: { type: SchemaType.STRING, description: 'all|at_risk|today|this_week|overdue' }
-          }
-        }
-      },
-      {
-        name: 'add_task',
-        description: 'Add a new task to track. After adding, the agent will automatically find and schedule work sessions.',
-        parameters: {
-          type: SchemaType.OBJECT,
-          properties: {
-            title: { type: SchemaType.STRING },
-            description: { type: SchemaType.STRING },
-            deadline: { type: SchemaType.STRING, description: 'ISO 8601 datetime' },
-            estimated_hours: { type: SchemaType.NUMBER },
-            priority: { type: SchemaType.STRING, description: 'critical|high|medium|low' },
-            subtasks: { type: SchemaType.ARRAY, items: { type: SchemaType.STRING } }
+            filter: {
+              type: 'string' as any,
+              description: 'Narrow the result set. One of: all, at_risk, today, this_week, overdue, completed. Defaults to all.',
+              enum: ['all', 'at_risk', 'today', 'this_week', 'overdue', 'completed'],
+            },
           },
-          required: ['title', 'deadline']
-        }
+        },
       },
+
       {
-        name: 'update_task_progress',
-        description: 'Update a task\'s completion percentage or mark it as done when the user reports progress.',
+        name:        'add_task',
+        description: 'Add a new task to Firestore and auto-schedule a first focus session in Google Calendar.',
         parameters: {
-          type: SchemaType.OBJECT,
+          type: 'object' as any,
           properties: {
-            task_id: { type: SchemaType.STRING },
-            progress_percent: { type: SchemaType.NUMBER, description: '0 to 100' },
-            completed: { type: SchemaType.BOOLEAN },
-            completion_note: { type: SchemaType.STRING }
+            title: {
+              type:        'string' as any,
+              description: 'Clear, concise task title',
+            },
+            deadline: {
+              type:        'string' as any,
+              description: 'ISO 8601 deadline datetime',
+            },
+            estimated_hours: {
+              type:        'number' as any,
+              description: 'Estimated total hours of focused work needed',
+            },
+            priority: {
+              type:        'string' as any,
+              description: 'Task priority level',
+              enum: ['critical', 'high', 'medium', 'low'],
+            },
+            subtasks: {
+              type: 'array' as any,
+              description: 'Optional list of subtask titles',
+              items: { type: 'string' as any },
+            },
           },
-          required: ['task_id']
-        }
+          required: ['title', 'deadline'],
+        },
       },
+
       {
-        name: 'analyze_deadline_risk',
-        description: 'Compute whether a task can realistically be completed by its deadline given remaining work hours and calendar availability. Returns a risk level and reason.',
+        name:        'update_task_progress',
+        description: 'Update the completion percentage of a task, or mark it as fully complete.',
         parameters: {
-          type: SchemaType.OBJECT,
+          type: 'object' as any,
           properties: {
-            task_id: { type: SchemaType.STRING },
-            deadline: { type: SchemaType.STRING },
-            hours_remaining_estimate: { type: SchemaType.NUMBER }
+            task_id: {
+              type:        'string' as any,
+              description: 'Firestore document ID of the task',
+            },
+            progress_percent: {
+              type:        'number' as any,
+              description: 'New completion percentage, 0–100',
+            },
+            completed: {
+              type:        'boolean' as any,
+              description: 'Set to true to mark the task as fully complete',
+            },
           },
-          required: ['task_id', 'deadline']
-        }
+          required: ['task_id', 'progress_percent'],
+        },
       },
+
       {
-        name: 'scan_gmail_for_deadlines',
-        description: 'Search Gmail for emails that contain deadlines or time-sensitive commitments the user may have missed. Extracts them as tasks to add.',
+        name:        'analyze_deadline_risk',
+        description: 'Calculate the deadline risk score for a specific task based on time remaining and estimated work hours. Updates riskScore in Firestore.',
         parameters: {
-          type: SchemaType.OBJECT,
+          type: 'object' as any,
           properties: {
-            look_back_days: { type: SchemaType.NUMBER, description: 'How many days back to scan. Defaults to 7.' }
-          }
-        }
-      },
-      {
-        name: 'draft_email',
-        description: 'Create a Gmail draft. Use this for deadline extension requests, status updates, or any commitment communication.',
-        parameters: {
-          type: SchemaType.OBJECT,
-          properties: {
-            to: { type: SchemaType.STRING },
-            subject: { type: SchemaType.STRING },
-            body: { type: SchemaType.STRING },
-            save_as_draft: { type: SchemaType.BOOLEAN, description: 'If false, send immediately. Defaults to true.' }
+            task_id: {
+              type:        'string' as any,
+              description: 'Firestore document ID of the task to analyse',
+            },
           },
-          required: ['to', 'subject', 'body']
-        }
+          required: ['task_id'],
+        },
       },
+
+      // ── Gmail ────────────────────────────────────────────────────────────
+
       {
-        name: 'activate_crisis_mode',
-        description: 'Activate CLUTCH Crisis Mode for a task due in under 4 hours. This triggers the full-screen crisis UI and re-prioritizes the user\'s focus.',
+        name:        'scan_gmail_for_deadlines',
+        description: 'Scan the user\'s Gmail inbox for emails that contain deadlines, commitments, or time-sensitive requests.',
         parameters: {
-          type: SchemaType.OBJECT,
+          type: 'object' as any,
           properties: {
-            task_id: { type: SchemaType.STRING },
-            task_title: { type: SchemaType.STRING },
-            hours_remaining: { type: SchemaType.NUMBER },
-            can_complete: { type: SchemaType.BOOLEAN, description: 'Whether the task can realistically be finished in time' }
+            look_back_days: {
+              type:        'number' as any,
+              description: 'How many days back to scan. Defaults to 7.',
+            },
           },
-          required: ['task_id', 'hours_remaining']
-        }
+        },
       },
+
       {
-        name: 'generate_battle_plan',
-        description: 'Generate a complete scheduled work plan for the coming days, automatically creating calendar sessions for each task based on priority and available time.',
+        name:        'draft_email',
+        description: 'Compose and optionally send an email on behalf of the user via Gmail.',
         parameters: {
-          type: SchemaType.OBJECT,
+          type: 'object' as any,
           properties: {
-            planning_horizon_days: { type: SchemaType.NUMBER, description: 'Days to plan ahead (1–7)' },
-            auto_schedule: { type: SchemaType.BOOLEAN, description: 'If true, auto-create calendar events without additional confirmation' }
-          }
-        }
-      }
-    ]
-  }
+            to: {
+              type:        'string' as any,
+              description: 'Recipient email address',
+            },
+            subject: {
+              type:        'string' as any,
+              description: 'Email subject line',
+            },
+            body: {
+              type:        'string' as any,
+              description: 'Plain text email body',
+            },
+            save_as_draft: {
+              type:        'boolean' as any,
+              description: 'If true, save as draft instead of sending. Defaults to true.',
+            },
+          },
+          required: ['to', 'subject', 'body'],
+        },
+      },
+
+      // ── Crisis ───────────────────────────────────────────────────────────
+
+      {
+        name:        'activate_crisis_mode',
+        description: 'Activate Crisis Mode for a task with a deadline under 4 hours. This flags the task as critical, sends a push notification, and opens the crisis UI overlay.',
+        parameters: {
+          type: 'object' as any,
+          properties: {
+            task_id: {
+              type:        'string' as any,
+              description: 'Firestore document ID of the task in crisis',
+            },
+            task_title: {
+              type:        'string' as any,
+              description: 'Human-readable task name',
+            },
+            hours_remaining: {
+              type:        'number' as any,
+              description: 'Hours until the deadline',
+            },
+            can_complete: {
+              type:        'boolean' as any,
+              description: 'Whether completion is still achievable given current progress',
+            },
+          },
+          required: ['task_id', 'task_title', 'hours_remaining'],
+        },
+      },
+
+      // ── Battle Plan ──────────────────────────────────────────────────────
+
+      {
+        name:        'generate_battle_plan',
+        description: 'Generate a full multi-day work plan that schedules all active tasks into Google Calendar focus blocks. Use this when the user asks for a schedule, plan, or battle plan.',
+        parameters: {
+          type: 'object' as any,
+          properties: {
+            planning_horizon_days: {
+              type:        'number' as any,
+              description: 'Number of days to plan ahead. Defaults to 3.',
+            },
+          },
+        },
+      },
+
+    ],
+  },
 ];

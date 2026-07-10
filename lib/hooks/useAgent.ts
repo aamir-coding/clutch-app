@@ -23,17 +23,6 @@ export function useAgent() {
   const resolveToolCall  = useUiStore(state => state.resolveToolCall);
   const clearToolCalls   = useUiStore(state => state.clearToolCalls);
 
-  /**
-   * sendMessage is wrapped in useCallback so that AgentChat's own
-   * useCallback(handleSubmit, [sendMessage]) chain stabilises correctly.
-   * Without this, every render of useAgent produces a new sendMessage
-   * reference, which cascades into handleSubmit → handleKeyDown being
-   * recreated on every keystroke in the textarea.
-   *
-   * conversationId is included in the dependency array because the function
-   * closes over it — omitting it would be a stale-closure bug where the
-   * second message in a conversation would always send `conversationId: null`.
-   */
   const sendMessage = useCallback(async (userMessage: string) => {
     const newUserMsg: AgentMessage = {
       id:        crypto.randomUUID(),
@@ -49,6 +38,28 @@ export function useAgent() {
     clearToolCalls();
     setError(null);
 
+    // Create the assistant placeholder immediately so the UI shows activity.
+    const assistantMsgId = crypto.randomUUID();
+    const assistantMessage: AgentMessage = {
+      id:        assistantMsgId,
+      role:      'assistant',
+      content:   '',
+      toolCalls: [],
+      timestamp: new Date(),
+    };
+    setMessages(prev => [...prev, assistantMessage]);
+
+    /**
+     * Helper: update the assistant message in state without mutating the
+     * original object reference.
+     */
+    const updateAssistant = (patch: Partial<AgentMessage>) => {
+      Object.assign(assistantMessage, patch);
+      setMessages(prev =>
+        prev.map(m => m.id === assistantMsgId ? { ...assistantMessage } : m)
+      );
+    };
+
     try {
       const userId   = user?.uid ?? 'guest';
       const response = await fetch('/api/agent', {
@@ -57,22 +68,15 @@ export function useAgent() {
         body:    JSON.stringify({ message: userMessage, userId, conversationId }),
       });
 
-      if (!response.ok) throw new Error('Network response was not ok');
+      if (!response.ok) {
+        throw new Error(`Server error ${response.status}: ${await response.text()}`);
+      }
 
       const newConversationId = response.headers.get('X-Conversation-Id');
       if (newConversationId) setConversationId(newConversationId);
 
-      const assistantMessage: AgentMessage = {
-        id:        crypto.randomUUID(),
-        role:      'assistant',
-        content:   '',
-        toolCalls: [],
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, assistantMessage]);
-
       const reader = response.body?.getReader();
-      if (!reader) throw new Error('No readable stream');
+      if (!reader) throw new Error('Response body is not readable.');
 
       const decoder = new TextDecoder();
       let   buffer  = '';
@@ -81,6 +85,8 @@ export function useAgent() {
         const { done, value } = await reader.read();
         if (done) break;
 
+        // Buffer incomplete lines across read() calls so we never try to
+        // JSON.parse a partial object.
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() ?? '';
@@ -93,6 +99,12 @@ export function useAgent() {
             const event = JSON.parse(trimmed);
 
             switch (event.type as string) {
+
+              case 'text':
+                // Append streamed text to the assistant message content.
+                updateAssistant({ content: assistantMessage.content + (event.text as string) });
+                break;
+
               case 'tool_call':
                 addToolCall(event.name);
                 break;
@@ -101,50 +113,62 @@ export function useAgent() {
                 resolveToolCall(event.name, event.summary);
                 break;
 
-              case 'text':
-                assistantMessage.content += event.text as string;
-                setMessages(prev =>
-                  prev.map(m =>
-                    m.id === assistantMessage.id ? { ...assistantMessage } : m
-                  )
-                );
-                break;
-
               case 'crisis_activated':
                 if (event.taskId) {
                   useUiStore.getState().activateCrisisMode(event.taskId as string);
                 }
                 break;
 
-              case 'error':
-                setError(event.message as string);
+              case 'error': {
+                /**
+                 * KEY FIX: populate the assistant message with the error text
+                 * so it doesn't stay empty (which renders loading dots forever).
+                 * The message box will show the error inline in the chat thread.
+                 */
+                const errMsg = event.message as string;
+                setError(errMsg);
+                updateAssistant({
+                  content: `⚠️ **Something went wrong.** ${errMsg}\n\nPlease check your configuration and try again.`,
+                });
                 break;
+              }
             }
           } catch {
-            console.error('Failed to parse stream line:', trimmed);
+            // Malformed line — skip it without crashing the stream consumer.
+            console.warn('[useAgent] Could not parse stream line:', trimmed);
           }
         }
       }
 
-      // Flush any remaining buffer content after stream closes
+      // Flush any trailing buffer content after the stream closes.
       if (buffer.trim()) {
         try {
           const event = JSON.parse(buffer.trim());
           if (event.type === 'text') {
-            assistantMessage.content += event.text as string;
-            setMessages(prev =>
-              prev.map(m =>
-                m.id === assistantMessage.id ? { ...assistantMessage } : m
-              )
-            );
+            updateAssistant({ content: assistantMessage.content + (event.text as string) });
           }
         } catch {
-          // Incomplete trailing chunk — safe to ignore
+          // Incomplete trailing chunk — safe to discard.
         }
       }
 
+      /**
+       * Final safety net: if we got here without any content (e.g. the stream
+       * closed before producing any text or error events), show a fallback
+       * message so the loading dots don't persist indefinitely.
+       */
+      if (!assistantMessage.content.trim()) {
+        updateAssistant({
+          content: "I didn't receive a response. This usually means the Gemini API key isn't set or the model returned an empty reply. Check your `.env.local` file and server logs.",
+        });
+      }
+
     } catch (e: any) {
-      setError(e.message || 'Failed to send message');
+      const errMsg = e.message || 'Failed to contact the agent. Check your network and server logs.';
+      setError(errMsg);
+      updateAssistant({
+        content: `⚠️ **Connection error.** ${errMsg}`,
+      });
     } finally {
       setLoading(false);
       setAgentThinking(false);
@@ -154,6 +178,7 @@ export function useAgent() {
   const clearHistory = useCallback(() => {
     setMessages([]);
     setConversationId(null);
+    setError(null);
   }, []);
 
   return { messages, loading, error, conversationId, sendMessage, clearHistory };
